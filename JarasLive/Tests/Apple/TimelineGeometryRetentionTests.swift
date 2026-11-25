@@ -75,7 +75,7 @@ private struct GeometryRetentionFixture: View {
                         StatefulControl(role: "coverage-timeline", revision: revision).frame(width: 4000, height: 1800)
                     }.frame(maxWidth: .infinity).frame(height: 1800)
                 }.frame(maxWidth: .infinity).frame(height: 1800)
-            }.frame(maxWidth: .infinity).frame(height: geometry.size.height)
+            }.frame(maxWidth: .infinity, maxHeight: .infinity)
                 .overlay(CoverageProbe(coverage: geometry.size, project: project,
                     action: { state.actions.append("direct\(actionGeneration)") }).allowsHitTesting(false))
         }
@@ -151,6 +151,31 @@ MainActor.assumeIsolated {
     NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: window); settle(root)
     precondition(state.sizes.last?.width == 940, "Cancel must restore exact viewport geometry")
     print("SETLIST_TIMELINE_COVERAGE_RETAINS_BUILDER_WITH_LIVE_NATIVE_VIEWPORT_FOCUS_SCROLL_EXPANSION_MODEL_ENVIRONMENT_ACTIONS_AND_CANCEL_OK")
+    NativeSidebarResizeActivity.shared.begin(owner: root, retainsTimelineHeight: true)
+    settle(root)
+    let beforeHeightDrag = state.sizes.count
+    let offsetBeforeHeightDrag = vertical.contentView.bounds.minY
+    for height: CGFloat in [620, 566, 590, 638] {
+        window.setContentSize(NSSize(width: 940, height: height)); settle(root)
+        precondition(state.sizes.count == beforeHeightDrag,
+                     "Growing the mixer should crop the retained coverage without rebuilding the grid")
+        precondition(abs(vertical.contentView.bounds.height - height) < 0.5,
+                     "The scroll viewport must follow the mixer edge exactly while coverage is retained")
+        precondition(abs(vertical.contentView.bounds.minY - offsetBeforeHeightDrag) < 0.5)
+    }
+    window.setContentSize(NSSize(width: 940, height: 660)); settle(root)
+    let expandedHeight = state.sizes.last!.height
+    precondition(expandedHeight >= 660 && state.sizes.count == beforeHeightDrag + 1)
+    for height: CGFloat in [670, 700, 660] {
+        window.setContentSize(NSSize(width: 940, height: height)); settle(root)
+        precondition(state.sizes.count == beforeHeightDrag + 1, "One prepared band covers repeated pointer movement")
+        precondition(abs(vertical.contentView.bounds.height - height) < 0.5)
+    }
+    NativeSidebarResizeActivity.shared.end(owner: root); settle(root)
+    precondition(state.sizes.last == CGSize(width: 940, height: 660),
+                 "Release must restore the exact timeline geometry")
+    print("HOZ_MIXER_HEIGHT_DRAG_RETAINS_GRID_COVERAGE_AND_PRESERVES_LIVE_VIEWPORT_OK")
+
     window.close()
 }
 
@@ -196,10 +221,10 @@ MainActor.assumeIsolated {
     }
     divider.mouseDown(with: event(.leftMouseDown, delta: 0))
     divider.mouseDragged(with: event(.leftMouseDragged, delta: -40)); settle(root)
-    precondition(geometry.sizes.last?.width == (windowWidth >= 1200 ? 1536 : windowWidth - 366))
+    precondition(geometry.sizes.last?.width == (windowWidth >= 1200 ? 1536 : windowWidth - 360))
     geometry.builds.removeAll()
     divider.mouseUp(with: event(.leftMouseUp, delta: -55)); settle(root)
-    let expected = CGSize(width: windowWidth - 375 - 6, height: 600)
+    let expected = CGSize(width: windowWidth - 375, height: 600)
     let descriptions = geometry.builds.map { "\($0.size.width):\($0.revision)" }
     print("GEOMETRY_RELEASE_BUILDS \(descriptions)")
     print("GEOMETRY_RELEASE_STATE left=\(left.frame.size) boundary=\(boundary.frame.size) hosted=\(boundary.subviews[0].frame.size) mixer=\(mixer.frame.width) focus=\(window.firstResponder === control) count=\(control.count) revision=\(control.revision) language=\(control.language) dark=\(control.dark) blocked=\(control.blocked) project=\(coverage.project == geometry.project) enabled=\(coverage.enabled) scroll=\(scrolls.map { $0.contentView.bounds.origin })")
@@ -307,6 +332,13 @@ MainActor.assumeIsolated {
     let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1100, height: 600),
                           styleMask: [.titled], backing: .buffered, defer: false)
     window.isReleasedWhenClosed = false; window.contentView = root; settle(root)
+    let normalBuilds = state.sizes.count
+    let firstToken = WorkspaceGeometryIdentityProbe.tokens.last
+    state.actionGeneration = 2; settle(root)
+    precondition(WorkspaceGeometryIdentityProbe.tokens.last == firstToken && state.sizes.count == normalBuilds,
+                 "Repeated framework proposals must reuse the grid during normal playback, outside resize")
+    let initialControl = descendants(CoverageControl.self, in: root).first!
+    initialControl.openFX(); precondition(state.actions.last == "heldfx2")
     NativeSidebarResizeActivity.shared.begin(owner: root, retainsTimelineCoverage: true); settle(root)
     NativeSidebarResizeActivity.shared.end(owner: root); settle(root)
     let token = WorkspaceGeometryIdentityProbe.tokens.last!
@@ -352,7 +384,7 @@ MainActor.assumeIsolated {
     precondition(WorkspaceGeometryFinalLayoutProbe.commit == nil)
     precondition(geometry.builds.contains { $0.revision == 1 } && geometry.builds.last?.revision == 9,
         "a real model/project update between final layout and framework reproposal must never be deduplicated")
-    precondition(geometry.builds.allSatisfy { $0.size == CGSize(width: 1219, height: 600) } && control.project == replacement)
+    precondition(geometry.builds.allSatisfy { $0.size == CGSize(width: 1225, height: 600) } && control.project == replacement)
     control.action(); precondition(geometry.actions.last == "direct7")
     window.close()
     print("GEOMETRY_MODEL_PROJECT_CLOSURE_CHANGED_BETWEEN_COMMIT_AND_REPROPOSAL_OK")

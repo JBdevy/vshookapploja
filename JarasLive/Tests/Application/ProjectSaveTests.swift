@@ -943,8 +943,36 @@ final class ProjectSaveTests: XCTestCase {
             XCTAssertEqual(show.selectLibraryTimelineEntry(marker.id, region: false), stopped)
             XCTAssertEqual(executor.cursorPosition, stopped ? marker.position : 0)
             if stopped { XCTAssertEqual(show.navigationFocusPosition, marker.position) }
+            let selection = show.libraryTimelineSelection.state
+            XCTAssertEqual(selection.selected(in: project.songs[0].id, region: true), stopped ? region.id : nil)
+            XCTAssertEqual(selection.selected(in: project.songs[0].id, region: false), stopped ? marker.id : nil)
+            XCTAssertNil(selection.selected(in: UUID(), region: true))
             XCTAssertEqual(executor.playCommands, 0)
         }
+    }
+
+    @MainActor func testLibraryArrowNavigationHighlightsBeforeSeeking() async throws {
+        var project = Project.empty(name: "Library")
+        let first = TimelineMarker(id: UUID(), name: "First", position: 4, color: 0)
+        let next = TimelineMarker(id: UUID(), name: "Next", position: 8, color: 0)
+        project.songs[0].duration = 12
+        project.songs[0].markers = [first, next]
+        let executor = SaveTestExecutor()
+        let show = try ShowController(executor: executor, persistence: SaveTestStore(), initialProject: project)
+
+        show.browseLibraryTimelineEntry(first.id, region: false, commitAfterDelay: false)
+        XCTAssertEqual(show.libraryTimelineSelection.state.selected(in: show.current?.id, region: false), first.id)
+        try await Task.sleep(nanoseconds: 260_000_000)
+        XCTAssertEqual(executor.cursorPosition, 0, "Holding the first arrow press must not seek before key repeat starts")
+
+        show.browseLibraryTimelineEntry(next.id, region: false, commitAfterDelay: false)
+        XCTAssertEqual(show.libraryTimelineSelection.state.selected(in: show.current?.id, region: false), next.id)
+        XCTAssertEqual(executor.cursorPosition, 0)
+        show.finishLibraryTimelineNavigation(region: false)
+        for _ in 0..<20 where executor.cursorPosition == 0 {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTAssertEqual(executor.cursorPosition, next.position)
     }
 
     @MainActor func testGlobalSearchKeepsContainingPlaylistAndFallsBackToAllRegions() throws {

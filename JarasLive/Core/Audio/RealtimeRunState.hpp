@@ -12,6 +12,7 @@ public:
     static_assert(std::atomic<unsigned>::is_always_lock_free);
     bool running() const noexcept { return (state_.load(std::memory_order_acquire)&1u)!=0; }
     void stop() noexcept { state_.fetch_and(~1u,std::memory_order_acq_rel); }
+    bool stopped() const noexcept { return state_.load(std::memory_order_acquire)==0; }
     void waitStopped() const noexcept {
         assert(!running());
         while(state_.load(std::memory_order_acquire)&2u)std::this_thread::yield();

@@ -17,7 +17,8 @@ enum JarasLocalization { static func string(_ value: String) -> String { value }
 @MainActor final class ControlMappings { static let shared = ControlMappings(); var editing: Int?; var transferRequest: Int? }
 @MainActor final class TestShow {
     var current: Song?; var snapshot = Snapshot(); var allowed = true
-    var timelineItemMixLocked = false
+    var timelineItemVolumeLocked = false
+    var timelineItemPanLocked = false
     var gains: [UUID: Double] = [:]; var pans: [UUID: Double] = [:]; var commits = 0
     func canControl() -> Bool { allowed }
     func previewItemGain(_ id: UUID, gain: Double) { gains[id] = gain }
@@ -108,7 +109,7 @@ final class Scene: UIResponder, UIWindowSceneDelegate {
             expect(!control.point(inside: CGPoint(x: 10,y: 25), with: nil), "Header captured item body")
         }
         control.frame.size.width = 600
-        control.mixLocked = true
+        control.mixLocks = TimelineItemControlLocks(volume: true, pan: true)
         let lockedCommits = show.commits
         for knob in [geometry().gainKnobRect!, geometry().panKnobRect!] {
             let touch = HeaderTouch(control, center(knob))
@@ -118,7 +119,7 @@ final class Scene: UIResponder, UIWindowSceneDelegate {
             control.endTracking(touch, with: HeaderEvent())
         }
         expect(show.commits == lockedCommits && harness.scrolling.itemMix == nil, "Locked knobs changed their visual or audio preview")
-        control.mixLocked = false
+        control.mixLocks = TimelineItemControlLocks()
         let g = geometry(), gain = HeaderTouch(control,center(geometry().gainKnobRect!))
         expect(control.beginTracking(gain, with: HeaderEvent()), "Gain knob refused primary press")
         expect(window!.subviews.contains { $0.accessibilityIdentifier == "itemMixTooltip" }, "Touch did not reveal gain tooltip")

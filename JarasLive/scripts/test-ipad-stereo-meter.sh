@@ -7,9 +7,10 @@ python3 - "$test_dir/main.swift" <<'PY'
 from pathlib import Path
 import sys
 audio = Path('Apple/Shared/StemAudioPlayback.swift').read_text()
-style = audio[audio.index('enum MixerMeterStyle {'):audio.index('struct MixerFaderMeter:')]
+style = audio[audio.index('enum HorizontalTrackFaderScale {'):audio.index('struct MixerFaderMeter:')]
 theme = Path('Apple/Shared/Theme.swift').read_text()
-display = '; '.join(line.strip() for line in theme.splitlines() if 'static let displayHex:' in line or 'static let lightDarkBackgroundHex:' in line)
+display = '; '.join(line.strip() for line in theme.splitlines() if any(key in line for key in
+    ('static let displayHex:', 'static let lightDarkBackgroundHex:', 'static let workspaceToolbar =')))
 interface = theme[theme.index('enum JarasInterfaceTheme:'):theme.index('enum JarasTheme {')]
 color = theme[theme.index('extension Color {'):theme.index('#if os(macOS)\nenum DesktopToolbarTone')]
 Path(sys.argv[1]).write_text('import SwiftUI\nimport QuartzCore\nenum JarasTheme { ' + display + ' }\n' + interface + color + style + '\n' + Path('Tests/Apple/IpadStereoMeterTests.swift').read_text())

@@ -1,5 +1,6 @@
 #import "JarasVST3.h"
 #if TARGET_OS_OSX
+#import <CoreAudioKit/AUViewController.h>
 #include "CatMIDISequenceBridge.h"
 #include "JarasRealtimeClock.hpp"
 #include "../../Core/Transport/PluginTransportClock.hpp"
@@ -30,6 +31,7 @@
 #include <cstring>
 #include <cmath>
 #include <stdexcept>
+#include <cstdio>
 using namespace Steinberg;
 using namespace Steinberg::Vst;
 namespace Steinberg {
@@ -273,12 +275,14 @@ struct MIDIPerformance {
     std::atomic<double> controllers[16][130];
     MIDIPerformance(){for(auto &channel:controllers)for(auto &value:channel)value=-1;}
 };
+#include "JarasHostedAudioUnit.inc"
 class Instance final: public IComponentHandler, public IComponentHandler2 {
 public:
     std::shared_ptr<Module> module; Host host; IComponent *component=nullptr; IAudioProcessor *processor=nullptr; IEditController *controller=nullptr;
     IConnectionPoint *source=nullptr,*destination=nullptr; bool initialized=false,controllerInitialized=false,active=false,processing=false;
     bool instrument=false;
-    NSString *identifier; std::atomic<bool> bypass{false},hasChanges{false}; std::unique_ptr<Param[]> params; int paramCount=0; Changes changes;
+    std::unique_ptr<HostedAudioUnit> audioUnit;
+    NSString *identifier, *classID; std::atomic<bool> bypass{false},hasChanges{false}; std::unique_ptr<Param[]> params; int paramCount=0; Changes changes;
     catlive::audio::VST3GainReduction reduction;
     std::vector<std::pair<ParamID,int>> parameterIndex;
     std::vector<AudioBusBuffers> inputs,outputs; std::vector<std::vector<float>> storage; std::vector<std::vector<float *>> pointers;
@@ -324,7 +328,26 @@ public:
         notifyEdit();return kResultOk;}
     tresult PLUGIN_API restartComponent(int32) override{return kResultFalse;}
     explicit Instance(NSDictionary *spec,double sampleRate,bool offline):rate(sampleRate),processMode(offline?kOffline:kRealtime) { try {
-        identifier=spec[@"id"];instrument=[spec[@"category"] containsString:@"Instrument"]; module=loadPluginModule(spec); FUID uid;
+        identifier=spec[@"id"]; classID=spec[@"classID"];
+        instrument=[spec[@"category"] containsString:@"Instrument"];
+        if ([spec[@"classID"] hasPrefix:@"AU-"]) {
+            const auto description = hostedAudioUnitDescription(spec[@"classID"]);
+            const auto component = AudioComponentFindNext(nullptr, &description);
+            if (!component) throw std::runtime_error("This Audio Unit is not installed.");
+            AVAudioUnit *node = nil;
+            @try {
+                node = instrument ? [[AVAudioUnitMIDIInstrument alloc] initWithAudioComponentDescription:description]
+                                  : [[AVAudioUnitEffect alloc] initWithAudioComponentDescription:description];
+            } @catch (NSException *error) {
+                throw std::runtime_error(error.reason.UTF8String ?: "Audio Unit is unavailable.");
+            }
+            audioUnit = std::make_unique<HostedAudioUnit>(node, rate, instrument, offline, spec[@"componentState"]);
+            appliedComponent = spec[@"componentState"];
+            bypass = [spec[@"bypassed"] boolValue];
+            return;
+        }
+        module=loadPluginModule(spec);
+        FUID uid;
         if(!uid.fromString([spec[@"classID"] UTF8String])||module->factory->createInstance(uid,IComponent::iid,(void **)&component)!=kResultOk||!component)throw std::runtime_error("Could not create this VST3 processor.");
         if(component->initialize(&host)!=kResultOk)throw std::runtime_error("VST3 processor initialization failed."); initialized=true;
         processor=query<IAudioProcessor>(component);if(!processor||processor->canProcessSampleSize(kSample32)!=kResultOk)throw std::runtime_error("This VST3 processor does not support 32-bit audio.");
@@ -401,8 +424,8 @@ public:
     void enqueue(uint8 status,uint8 data1,uint8 data2){
         auto &midi=midiPerformance->midi;auto &midiRead=midiPerformance->read;auto &midiWrite=midiPerformance->write;auto &panic=midiPerformance->panic;
         int kind=status&0xf0,channel=status&15;
-        if(kind==0xb0||kind==0xe0){auto cc=kind==0xe0?129:data1;if(cc<130){const double value=kind==0xe0?double(data1|(data2<<7))/16383.:double(data2)/127.;midiPerformance->controllers[channel][cc]=value;midiPerformance->controllersChanged=true;if(midiParameters[channel][cc]!=kNoParamId)queueParameter(midiParameters[channel][cc],value);}if(kind==0xb0&&data1>=120)panic=true;return;}
-        if(kind!=0x80&&kind!=0x90)return;
+        if(!audioUnit && (kind==0xb0||kind==0xe0)){auto cc=kind==0xe0?129:data1;if(cc<130){const double value=kind==0xe0?double(data1|(data2<<7))/16383.:double(data2)/127.;midiPerformance->controllers[channel][cc]=value;midiPerformance->controllersChanged=true;if(midiParameters[channel][cc]!=kNoParamId)queueParameter(midiParameters[channel][cc],value);}if(kind==0xb0&&data1>=120)panic=true;return;}
+        if(!audioUnit && kind!=0x80&&kind!=0x90)return;
         auto write=midiWrite.load(std::memory_order_relaxed),read=midiRead.load(std::memory_order_acquire);
         if(write-read>=midi.size()){panic=true;return;}
         midi[write%midi.size()]={status,data1,data2};midiWrite.store(write+1,std::memory_order_release);
@@ -410,6 +433,25 @@ public:
     void process(AudioBufferList *buffer,unsigned count,const jaras::PluginTransport& transport,const CatMIDIEvent* sequence,unsigned sequenceCount){
         if(bypass.load()||count>frames)return;
         auto &midi=midiPerformance->midi;auto &midiRead=midiPerformance->read;auto &midiWrite=midiPerformance->write;auto &panic=midiPerformance->panic;auto &held=midiPerformance->held;
+        if (audioUnit) {
+            if (panic.exchange(false)) {
+                for (uint8 channel = 0; channel < 16; ++channel) {
+                    audioUnit->send(0, {uint8(0xb0 | channel), 64, 0});
+                    audioUnit->send(0, {uint8(0xb0 | channel), 123, 0});
+                }
+                midiRead.store(midiWrite.load(std::memory_order_acquire), std::memory_order_release);
+            }
+            auto read = midiRead.load(std::memory_order_relaxed);
+            const auto write = midiWrite.load(std::memory_order_acquire);
+            while (read != write) audioUnit->send(0, midi[read++ % midi.size()]);
+            midiRead.store(read, std::memory_order_release);
+            for (unsigned index = 0; index < sequenceCount; ++index) {
+                const auto &event = sequence[index];
+                audioUnit->send(event.offset, {event.status, event.pitch, event.velocity});
+            }
+            audioUnit->process(buffer, count, transport);
+            return;
+        }
         const bool resuming=resumeMIDI;
         if(midiPerformance->controllersChanged.exchange(false)||resuming){
             for(int channel=0;channel<16;++channel){
@@ -511,6 +553,7 @@ public:
         return replacement;
     }
     NSDictionary *state(){
+        if (audioUnit) return audioUnit->state();
         Stream componentData,controllerData;
         // Never replace a recoverable preset with an empty blob when a plugin
         // fails to serialize (for example while a library is still loading).
@@ -543,7 +586,7 @@ struct Kernel {
         // the render reader lease, and keep querying the processor so a
         // parameter-dependent latency is never frozen at initial setup.
         readers.fetch_add(1);auto chain=published.load();double seconds=0;
-        if(chain)for(auto &i:chain->instances)if(!i->bypass.load())seconds+=i->processor->getLatencySamples()/i->rate;
+        if(chain)for(auto &i:chain->instances)if(!i->bypass.load())seconds+=i->audioUnit ? i->audioUnit->unit.latency : i->processor->getLatencySamples()/i->rate;
         readers.fetch_sub(1);return seconds;
     }
     void replace(std::unique_ptr<Chain> next){
@@ -640,9 +683,72 @@ static NSHashTable<JarasVSTEditorView *> *nativeEditors(){
 }
 - (void)dealloc {if(plugView){if(attached)plugView->removed();plugView->setFrame(nullptr);plugView->release();}}
 @end
+@interface JarasAudioUnitEditorView : NSView {
+@public
+    std::shared_ptr<Instance> instance;
+}
+- (void)bindInstance:(std::shared_ptr<Instance>)replacement;
+@end
+static NSHashTable<JarasAudioUnitEditorView *> *audioUnitEditors() {
+    static NSHashTable<JarasAudioUnitEditorView *> *views = [NSHashTable weakObjectsHashTable];
+    return views;
+}
+@implementation JarasAudioUnitEditorView {
+    NSViewController *_editor;
+    AUParameterObserverToken _observer;
+    NSTimer *_editTimer;
+}
+- (void)stopObserving {
+    [_editTimer invalidate];
+    _editTimer = nil;
+    if (_observer) {
+        [instance->audioUnit->tree removeParameterObserver:_observer];
+        _observer = nullptr;
+    }
+}
+- (void)bindInstance:(std::shared_ptr<Instance>)replacement {
+    [self stopObserving];
+    [_editor.view removeFromSuperview];
+    _editor = nil;
+    instance = replacement;
+    __weak JarasAudioUnitEditorView *weakView = self;
+    [replacement->audioUnit->unit requestViewControllerWithCompletionHandler:^(NSViewController *editor) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            JarasAudioUnitEditorView *view = weakView;
+            if (!view || view->instance != replacement || !editor) return;
+            view->_editor = editor;
+            NSSize size = editor.preferredContentSize;
+            if (size.width <= 0 || size.height <= 0) size = editor.view.frame.size;
+            if (size.width > 0 && size.height > 0) view.frameSize = size;
+            editor.view.frame = view.bounds;
+            editor.view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+            [view addSubview:editor.view];
+            [[NSNotificationCenter defaultCenter] postNotificationName:@"CatLivePluginEditorSizeChanged" object:view];
+        });
+    }];
+    auto edited = std::make_shared<std::atomic<bool>>(false);
+    _observer = [replacement->audioUnit->tree tokenByAddingParameterObserver:^(AUParameterAddress address, AUValue value) {
+        edited->store(true, std::memory_order_relaxed);
+    }];
+    _editTimer = [NSTimer scheduledTimerWithTimeInterval:0.25 repeats:YES block:^(NSTimer *timer) {
+        auto view = weakView;
+        if (view && edited->exchange(false)) view->instance->notifyEdit();
+        if (!view) [timer invalidate];
+    }];
+}
+- (void)dealloc { [self stopObserving]; }
+@end
+
 static void replaceNativeEditors(std::shared_ptr<Instance> previous,std::shared_ptr<Instance> replacement){
     if(!previous->hasNativeEditor.load())return;
     auto rebind=^{
+        if (previous->audioUnit && replacement->audioUnit) {
+            for (JarasAudioUnitEditorView *view in audioUnitEditors().allObjects) if (view->instance == previous) {
+                replacement->hasNativeEditor = true;
+                [view bindInstance:replacement];
+            }
+            return;
+        }
         for(JarasVSTEditorView *view in nativeEditors().allObjects)if(view->instance==previous){
             replacement->hasNativeEditor=true;[view replaceInstance:replacement];
         }
@@ -651,6 +757,25 @@ static void replaceNativeEditors(std::shared_ptr<Instance> previous,std::shared_
 }
 
 @implementation JarasVST3
++ (NSArray<NSDictionary *> *)installedAudioUnits {
+    NSMutableArray *plugins = [NSMutableArray array];
+    AVAudioUnitComponentManager *manager = AVAudioUnitComponentManager.sharedAudioUnitComponentManager;
+    for (OSType type : {kAudioUnitType_Effect, kAudioUnitType_MusicEffect, kAudioUnitType_MusicDevice}) {
+        const AudioComponentDescription query{type, 0, 0, 0, 0};
+        for (AVAudioUnitComponent *unit in [manager componentsMatchingDescription:query]) {
+            const auto d = unit.audioComponentDescription;
+            if (d.componentManufacturer == 'Jara') continue;
+            // The synchronous graph builder can prepare ordinary AUv2 units.
+            if (d.componentFlags & kAudioComponentFlag_RequiresAsyncInstantiation) continue;
+            NSString *identity = [NSString stringWithFormat:@"AU-%08X-%08X-%08X",
+                                  d.componentType, d.componentSubType, d.componentManufacturer];
+            NSString *category = type == kAudioUnitType_MusicDevice ? @"Instrument|Audio Units" : @"Fx|Audio Units";
+            [plugins addObject:@{@"classID":identity, @"name":unit.name, @"path": [@"au://" stringByAppendingString:identity],
+                                 @"vendor":unit.manufacturerName, @"category":category}];
+        }
+    }
+    return plugins;
+}
 + (NSArray<NSDictionary *> *)scan:(NSString *)path error:(NSError **)error {
     try {
         // A rescan can run while a live/offline instance still owns this
@@ -710,12 +835,12 @@ static void replaceNativeEditors(std::shared_ptr<Instance> previous,std::shared_
             NSDictionary *replacement=nil;
             // State restoration is arbitrary plugin code. Never run setState
             // on the processor concurrently serving the render callback.
-            if(!i||fabs(i->rate-rate)>0.01||i->processMode!=processMode)replacement=spec;
+            if(!i||![i->classID isEqualToString:spec[@"classID"]]||fabs(i->rate-rate)>0.01||i->processMode!=processMode)replacement=spec;
             else replacement=i->replacementSpec(spec);
             if(replacement){
                 i=std::make_shared<Instance>(replacement,rate,offline);
                 i->appliedComponent=spec[@"componentState"];i->appliedController=spec[@"controllerState"];
-                if(previous){
+                if(previous && [previous->classID isEqualToString:i->classID]){
                     i->edited=previous->edited;i->parameterEdited=previous->parameterEdited;
                     i->hasNativeEditor=previous->hasNativeEditor.load();
                     i->midiPerformance=previous->midiPerformance;i->resumeMIDI=true;
@@ -772,10 +897,40 @@ static void replaceNativeEditors(std::shared_ptr<Instance> previous,std::shared_
     if (!instance || !instance->reduction.supported()) return -1.f;
     return instance->bypass.load() ? 0.f : instance->reduction.read();
 }
-+ (NSArray<NSDictionary *> *)parameters:(AVAudioUnitEffect *)node identifier:(NSString *)id {auto i=((JarasVSTAudioUnit *)node.AUAudioUnit)->kernel.find(id);NSMutableArray *result=[NSMutableArray array];if(i&&i->controller)for(int n=0;n<i->paramCount;n++){ParameterInfo p{};i->controller->getParameterInfo(n,p);if(p.flags&ParameterInfo::kIsReadOnly)continue;[result addObject:@{@"id":@(p.id),@"name":text(p.title),@"value":@(i->controller->getParamNormalized(p.id))}];}return result;}
-+ (void)setParameter:(AVAudioUnitEffect *)node identifier:(NSString *)id parameter:(unsigned int)param value:(double)value {auto i=((JarasVSTAudioUnit *)node.AUAudioUnit)->kernel.find(id);if(i&&i->controller){value=std::clamp(value,0.,1.);i->controller->setParamNormalized(param,value);i->queueParameter(param,value);}}
++ (NSArray<NSDictionary *> *)parameters:(AVAudioUnitEffect *)node identifier:(NSString *)id {
+    auto unit = ((JarasVSTAudioUnit *)node.AUAudioUnit)->kernel.find(id);
+    if (unit && unit->audioUnit) {
+        NSMutableArray *result = [NSMutableArray array];
+        const auto &parameters = unit->audioUnit->parameters;
+        for (unsigned index = 0; index < parameters.size(); ++index) {
+            AUParameter *p = parameters[index];
+            [result addObject:@{@"id":@(index), @"name":p.displayName,
+                                @"value":@(HostedAudioUnit::normalized(p, p.value))}];
+        }
+        return result;
+    }
+    auto i=((JarasVSTAudioUnit *)node.AUAudioUnit)->kernel.find(id);NSMutableArray *result=[NSMutableArray array];if(i&&i->controller)for(int n=0;n<i->paramCount;n++){ParameterInfo p{};i->controller->getParameterInfo(n,p);if(p.flags&ParameterInfo::kIsReadOnly)continue;[result addObject:@{@"id":@(p.id),@"name":text(p.title),@"value":@(i->controller->getParamNormalized(p.id))}];}return result;}
++ (void)setParameter:(AVAudioUnitEffect *)node identifier:(NSString *)id parameter:(unsigned int)param value:(double)value {
+    auto unit = ((JarasVSTAudioUnit *)node.AUAudioUnit)->kernel.find(id);
+    if (unit && unit->audioUnit) {
+        const auto &parameters = unit->audioUnit->parameters;
+        if (param < parameters.size()) {
+            AUParameter *p = parameters[param];
+            p.value = p.minValue + std::clamp(value, 0., 1.) * (p.maxValue - p.minValue);
+        }
+        return;
+    }
+    auto i=((JarasVSTAudioUnit *)node.AUAudioUnit)->kernel.find(id);if(i&&i->controller){value=std::clamp(value,0.,1.);i->controller->setParamNormalized(param,value);i->queueParameter(param,value);}}
 + (NSView *)editor:(AVAudioUnitEffect *)node identifier:(NSString *)identifier {
     auto instance = ((JarasVSTAudioUnit *)node.AUAudioUnit)->kernel.find(identifier);
+    if (instance && instance->audioUnit) {
+        if (!instance->audioUnit->unit.providesUserInterface) return nil;
+        auto view = [[JarasAudioUnitEditorView alloc] initWithFrame:NSMakeRect(0, 0, 720, 520)];
+        [view bindInstance:instance];
+        instance->hasNativeEditor = true;
+        [audioUnitEditors() addObject:view];
+        return view;
+    }
     if (!instance || !instance->controller) return nil;
     auto plugin = instance->controller->createView(ViewType::kEditor);
     if (!plugin) return nil;

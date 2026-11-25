@@ -121,8 +121,12 @@ struct PreparedPCMReader {
         }
         if (!result.empty()) return result;
         AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:file.processingFormat frameCapacity:frames];
-        if (file.framePosition != first) file.framePosition = first;
-        if (!buffer || ![file readIntoBuffer:buffer frameCount:frames error:error]) return {};
+        if (!buffer) return {};
+        {
+            const catlive::audio::DiskIOActivity::Operation read(catlive::audio::diskIOActivity);
+            if (file.framePosition != first) file.framePosition = first;
+            if (![file readIntoBuffer:buffer frameCount:frames error:error]) return {};
+        }
         if (buffer.frameLength == 0 || buffer.format.channelCount == 0 || !buffer.floatChannelData) {
             if (error) *error = [NSError errorWithDomain:@"CatLive.PreparedAudio" code:3
                 userInfo:@{NSLocalizedDescriptionKey:@"Could not decode source audio"}];
@@ -374,7 +378,6 @@ struct PreparedPCMCache {
     void releaseIdlePages() {
         active.store(false);
         releaseRequested.store(true);
-        collectIdlePages(); // Never wait behind a disk read on the UI thread.
     }
 
 };
@@ -546,11 +549,24 @@ struct PreparedClipKernel : PreparedRenderSource {
         const double end = endFrame.load();
         const double loopFirst = cache->loopStart.load(), loopEnd = cache->loopEnd.load();
         const double wrappedFirst = cache->wrapped(first);
+        // Non-looping PCM can end anywhere inside a render quantum. Limit
+        // the copy to the valid prefix so simultaneous stem endings do not
+        // switch whole blocks to the per-sample interpolation path.
+        const int requestedFrames = frames;
+        if (step == 1 && loopEnd <= loopFirst && first >= 0 && std::floor(first) == first) {
+            const double remaining = std::min(double(cache->length), end) - first;
+            frames = int(std::clamp(std::ceil(remaining), 0., double(frames)));
+            if (frames < requestedFrames) {
+                std::fill_n(left + frames, requestedFrames - frames, 0.f);
+                std::fill_n(right + frames, requestedFrames - frames, 0.f);
+            }
+            if (frames == 0) return true;
+        }
         // Normal-speed reads between loop/file boundaries need exact PCM,
         // not interpolation or atomic loop queries for every sample. Both the
         // dry signal and its warm spectral history use this bounded copy path.
         if (step == 1 && wrappedFirst >= 0 && std::floor(wrappedFirst) == wrappedFirst &&
-            first + frames <= end && wrappedFirst + frames <= cache->length &&
+            first + frames - 1 < end && wrappedFirst + frames <= cache->length &&
             (loopEnd <= loopFirst || wrappedFirst + frames <= loopEnd)) {
             int copied = 0;
             while (copied < frames) {
@@ -671,6 +687,10 @@ struct PreparedClipKernel : PreparedRenderSource {
         pitch.setNeutralWarmup(!key.spectral);
         bool ok = true;
         double readFrame = key.frame;
+        // A hard cut from nonzero PCM clicks even when the output buffer is
+        // full. Ramp the final two milliseconds on the actual source clock,
+        // after stretching. The end is shared by contiguous tempo fragments.
+        const double releaseFrames = std::ceil(sampleRate * 0.002) * key.speed;
         for (int done = 0; done < key.count;) {
             const int capacity = key.nativeTempo
                 ? int(input[0].size() / std::max(1., key.speed)) - 1 : 512;
@@ -685,9 +705,13 @@ struct PreparedClipKernel : PreparedRenderSource {
             // identical to an unsplit render, even at fractional tempo ratios.
             pitch.process(inputs, inputCount, outputs, chunk, key.nativeTempo ? key.speed : 0, readFrame);
             if (!key.spectral) ok = read(key.source + done * key.speed, key.speed, chunk, outputs[0], outputs[1]) && ok;
-            if (key.source + (done + chunk - 1) * key.speed >= key.end) {
-                for (int n = 0; n < chunk; ++n) if (key.source + (done + n) * key.speed >= key.end)
-                    outputs[0][n] = outputs[1][n] = 0;
+            if (key.source + (done + chunk - 1) * key.speed > key.end - releaseFrames) {
+                for (int n = 0; n < chunk; ++n) {
+                    const double remaining = key.end - (key.source + (done + n) * key.speed);
+                    const float gain = float(std::clamp(remaining / releaseFrames, 0., 1.));
+                    outputs[0][n] *= gain;
+                    outputs[1][n] *= gain;
+                }
             }
             readFrame += chunk * key.speed;
             done += chunk;
@@ -1092,9 +1116,13 @@ struct PreparedClipKernel : PreparedRenderSource {
     _kernel->playback.stop();
     if (_kernel->cache) _kernel->cache->active.store(false);
 }
-- (void)suspendStreaming {
+- (void)suspendIdleStreaming {
     if (_kernel->streamingSuspended.load()) return;
-    std::lock_guard<std::mutex> lock(_kernel->preparation);
+    std::unique_lock<std::mutex> lock(_kernel->preparation, std::try_to_lock);
+    if (!lock.owns_lock()) return;
+    _kernel->playback.stop();
+    // The UI must not spin until a render callback releases its PCM history.
+    if (!_kernel->playback.stopped()) return;
     _kernel->stopRegisteredPlayback();
     _kernel->prepared = false;
     _kernel->streamingSuspended.store(true);
@@ -1104,8 +1132,16 @@ struct PreparedClipKernel : PreparedRenderSource {
     _kernel->pendingStretch.reset(); _kernel->pendingConsumed = 0;
     _kernel->stretch.reset();
     _kernel->parallelInPlaceReady = false; _kernel->parallelConsumed = 0;
-    if (_kernel->stretchGroup) _kernel->stretchGroup->trimStoppedTransitionStorage();
-    if (_kernel->cache) _kernel->cache->releaseIdlePages();
+    if (auto group = _kernel->stretchGroup) {
+        // The render lease is gone. Reclaim inactive FFT buffers off the
+        // control thread; the group rechecks which slots are still unused.
+        static dispatch_queue_t reclaim = dispatch_queue_create("com.catlive.idle-stretch", DISPATCH_QUEUE_SERIAL);
+        dispatch_async(reclaim, ^{ group->trimStoppedTransitionStorage(); });
+    }
+    if (_kernel->cache) {
+        _kernel->cache->releaseIdlePages();
+        PreparedPCMWorkers::shared().requestWake();
+    }
 }
 - (void)dealloc { [self stop]; [_timingOwner removeRenderSource:_kernel.get()]; }
 @end

@@ -101,6 +101,39 @@ public struct TransportSongDisplays {
     }
 }
 
+public enum TransportTitleMode: String, CaseIterable {
+    case none = "None"
+    case region = "Region"
+    case markers = "Markers"
+    case nextMarker = "Next Marker"
+    case nextTimelineRegion = "Next Region Timeline"
+    case nextSetlistRegion = "Next Region Setlist"
+    case queue = "Fila de espera"
+
+    public static let preferenceKey = "jaras.transport.titleMode"
+
+    public var followsCursor: Bool {
+        self == .markers || self == .nextMarker || self == .nextTimelineRegion
+    }
+
+    public func cursorTitle(in song: Song?, transport: TransportState) -> String? {
+        guard let song else { return nil }
+        let position = transport.playing || transport.paused == true
+            ? transport.position : transport.editPosition ?? transport.position
+        if self == .nextTimelineRegion {
+            return song.parts.lazy.filter { $0.parentRegionID == nil && $0.startTime > position }
+                .min { $0.startTime < $1.startTime }?.displayName
+        }
+        guard self == .markers || self == .nextMarker else { return nil }
+        let eligible = (song.markers ?? []).lazy.filter { $0.isNavigationMarker }
+        let marker = self == .markers
+            ? eligible.filter { $0.position <= position }.max { $0.position < $1.position }
+            : eligible.filter { $0.position > position }.min { $0.position < $1.position }
+        guard let marker else { return nil }
+        return song.parts.first { $0.id == marker.sourceRegionID }?.displayName ?? marker.name
+    }
+}
+
 public extension TransportState {
     /// Follow and zoom share transport priority; the editing head owns stopped navigation.
     var timelineZoomPosition: Double {

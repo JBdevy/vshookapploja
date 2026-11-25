@@ -67,7 +67,7 @@ struct IpadItemHeader: UIViewRepresentable {
     var itemTitle: String? = nil
     var pinsToViewport = true
     var sourceStartOffset: CGFloat = 0
-    var mixLocked = false
+    var mixLocks = TimelineItemControlLocks()
     var blackTitle = false
     let mix: (IpadItemMixParameter, Double, Bool, Bool) -> Void
     let mute: () -> Void
@@ -80,7 +80,7 @@ struct IpadItemHeader: UIViewRepresentable {
         view.interactionID = interactionID
         view.clip = clip; view.itemTitle = itemTitle; view.editable = editable; view.textEditable = textEditable
         view.pinsToViewport = pinsToViewport; view.sourceStartOffset = sourceStartOffset
-        view.mixLocked = mixLocked; view.blackTitle = blackTitle
+        view.mixLocks = mixLocks; view.blackTitle = blackTitle
         view.mix = mix; view.mute = mute; view.phase = phase; view.fx = fx; view.menu = menu
         view.isEnabled = enabled; view.setNeedsDisplay()
     }
@@ -102,11 +102,19 @@ final class IpadItemHeaderControl: UIControl {
     }
     var textEditable = false
     var blackTitle = false
-    var mixLocked = false {
+    var mixLocks = TimelineItemControlLocks() {
         didSet {
-            if mixLocked && !oldValue, let hit = activeGesture?.hit, hit == .gain || hit == .pan {
+            if mixLocks != oldValue, let hit = activeGesture?.hit, isLocked(hit) {
                 cancelTracking(with: nil); setNeedsDisplay()
             }
+        }
+    }
+    private func isLocked(_ hit: Hit) -> Bool {
+        switch hit {
+        case .gain: return mixLocks.volume
+        case .pan: return mixLocks.pan
+        case .mute: return mixLocks.mute
+        default: return false
         }
     }
     var pinsToViewport = true
@@ -205,7 +213,7 @@ final class IpadItemHeaderControl: UIControl {
     override func beginTracking(_ touch: UITouch, with event: UIEvent?) -> Bool {
         guard isEnabled, let hit = hit(touch.location(in: self)) else { return false }
         if event?.buttonMask.contains(.secondary) == true { menu(); return false }
-        if mixLocked && (hit == .gain || hit == .pan) { return false }
+        guard !isLocked(hit) else { return false }
         if touch.tapCount == 2, hit == .gain || hit == .pan {
             mix(hit == .gain ? .gain : .pan, hit == .gain ? 1 : 0, true, false)
             return false

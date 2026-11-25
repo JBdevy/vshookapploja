@@ -5,6 +5,7 @@
 #import <AppKit/AppKit.h>
 NS_ASSUME_NONNULL_BEGIN
 @interface JarasVST3 : NSObject
++ (NSArray<NSDictionary *> *)installedAudioUnits;
 + (NSArray<NSDictionary *> *)scan:(NSString *)path error:(NSError **)error;
 + (AVAudioUnitEffect *)makeNode;
 + (BOOL)configure:(AVAudioUnitEffect *)node plugins:(NSArray<NSDictionary *> *)plugins error:(NSError **)error;

@@ -286,6 +286,38 @@ enum TrackIconCatalog {
         let id: String
         let title: String
         let url: URL
+
+        #if os(macOS)
+        private typealias Bitmap = NSImage
+        #else
+        private typealias Bitmap = UIImage
+        #endif
+        @MainActor private static let bitmaps: NSCache<NSString, Bitmap> = {
+            let cache = NSCache<NSString, Bitmap>()
+            cache.countLimit = 128
+            return cache
+        }()
+
+        @MainActor var image: Image? {
+            let key = id as NSString
+            let bitmap: Bitmap
+            if let cached = Self.bitmaps.object(forKey: key) {
+                bitmap = cached
+            } else {
+                #if os(macOS)
+                guard let loaded = NSImage(contentsOf: url) else { return nil }
+                #else
+                guard let loaded = UIImage(contentsOfFile: url.path) else { return nil }
+                #endif
+                Self.bitmaps.setObject(loaded, forKey: key)
+                bitmap = loaded
+            }
+            #if os(macOS)
+            return Image(nsImage: bitmap)
+            #else
+            return Image(uiImage: bitmap)
+            #endif
+        }
     }
 
     struct Category: Decodable, Identifiable {
@@ -334,12 +366,8 @@ struct TrackIconDisplay: View {
     @ViewBuilder var body: some View {
         if let icon = TrackInstrumentIcon(rawValue: id) {
             TrackInstrumentIconView(icon: icon)
-        } else if let artwork = TrackIconCatalog.artwork(id) {
-            #if os(macOS)
-            if let image = NSImage(contentsOf: artwork.url) { artworkImage(Image(nsImage: image)) }
-            #else
-            if let image = UIImage(contentsOfFile: artwork.url.path) { artworkImage(Image(uiImage: image)) }
-            #endif
+        } else if let image = TrackIconCatalog.artwork(id)?.image {
+            artworkImage(image)
         }
     }
     @ViewBuilder private func artworkImage(_ image: Image) -> some View {

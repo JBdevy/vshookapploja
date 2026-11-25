@@ -10,7 +10,7 @@ struct Anchor: NSViewRepresentable {
 struct ScaledRoot<Content: View>: View {
  @ObservedObject var state: ScaleState
  let content: Content
- var body: some View { InterfaceScaleLayout(factor: CGFloat(InterfaceScale.factor(Double(state.factor))), content: content) }
+ var body: some View { content.interfaceScaled() }
 }
 // The workspace has a persistent hosting view inside a native deck. This is
 // intentionally different from a SwiftUI-only fixture: scaling its ancestor

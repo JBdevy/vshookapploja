@@ -135,14 +135,27 @@ let workspacePanelStyle: NSWindow.StyleMask = [.titled, .closable, .resizable]
         attachWorkspacePanel(panel)
         ProjectionWindow.presentWorkspaceWindow(panel)
     }
+    private func capturePluginState(for panel: NSPanel) {
+        guard let show, let key = windows.first(where: { $0.value === panel })?.key,
+              case .plugin(let track, let effect) = key.target else { return }
+        for plugin in show.fxSettings(track).externalPlugins ?? [] where plugin.effectKey == effect {
+            ExternalPluginState.capture(show: show, track: track, identifier: plugin.id)
+        }
+    }
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard let panel = sender as? NSPanel, let show,
+              let key = windows.first(where: { $0.value === panel })?.key,
+              targetExists(key, in: show),
+              (panel.contentView as? TrackFXChainView)?.hasHostedExternalEditor == true else { return true }
+        // Some plug-ins issue their Cocoa editor only once per processor.
+        // Keep it attached to the panel, then bring the same panel back.
+        capturePluginState(for: panel)
+        panel.orderOut(nil)
+        return false
+    }
     func windowWillClose(_ notification: Notification) {
         guard let panel = notification.object as? NSPanel else { return }
-        if let show, let key = windows.first(where: { $0.value === panel })?.key,
-           case .plugin(let track, let effect) = key.target {
-            for plugin in show.fxSettings(track).externalPlugins ?? [] where plugin.effectKey == effect {
-                ExternalPluginState.capture(show: show, track: track, identifier: plugin.id)
-            }
-        }
+        capturePluginState(for: panel)
         (panel.contentView as? TrackFXChainView)?.closeEditors()
         panel.parent?.removeChildWindow(panel)
         windows = windows.filter { $0.value !== panel }
@@ -165,6 +178,10 @@ let workspacePanelStyle: NSWindow.StyleMask = [.titled, .closable, .resizable]
         for panel in windows.values { (panel.contentView as? TrackFXChainView)?.restoreAudioEditor() }
     }
     func closeAll() { for panel in Array(windows.values) { panel.close() }; windows.removeAll() }
+}
+
+extension Notification.Name {
+    static let catLiveOpenPluginSettings = Notification.Name("catlive.openPluginSettings")
 }
 
 @MainActor private final class WorkspaceSettingsSelection: ObservableObject {
@@ -199,9 +216,11 @@ private struct WorkspaceToolContent<Content: View>: View {
     @AppStorage(JarasInterfaceTheme.preferenceKey) private var interfaceTheme = JarasInterfaceTheme.defaultTheme
     @AppStorage("jaras.language") private var language = "en"
     let content: Content
+    var fillsViewport = false
     let updateTitle: () -> Void
     var body: some View {
         content
+            .frame(maxWidth: fillsViewport ? .infinity : nil, maxHeight: fillsViewport ? .infinity : nil, alignment: .top)
             .background(interfaceTheme.background).foregroundStyle(JarasTheme.text)
             .environment(\.locale, Locale(identifier: language)).preferredColorScheme(.dark)
             .onChange(of: language) { _ in updateTitle() }
@@ -211,16 +230,64 @@ private struct WorkspaceToolContent<Content: View>: View {
 /// The workspace owns these panels, just as it owns its detached mixer.
 /// Refocusing a tool keeps its hosting view, selection and unfinished text edits.
 @MainActor final class WorkspaceToolWindows: NSObject, ObservableObject, NSWindowDelegate {
-    private enum Tool: String { case advanced, settings, textItem, fullLyrics, matrixPatch }
+    private enum Tool: String { case advanced, settings, textItem, fullLyrics, matrixPatch, patch, grandMA2, resolume }
+    private static let patchPresenter = WorkspaceToolWindows()
     @Published private(set) var settingsOpen = false
     @Published private(set) var advancedOpen = false
     @Published private(set) var matrixPatchOpen = false
+    @Published private(set) var grandMA2Open = false
+    @Published private(set) var resolumeOpen = false
     private var windows: [Tool: NSPanel] = [:]
     private var settingsSelection: WorkspaceSettingsSelection?
     private let advancedPresentation = WorkspaceToolPresentation()
     private var discardingWindows = false
     private weak var show: ShowController?
     private var projectObservation: AnyCancellable?
+    private weak var itemActionShow: ShowController?
+    private var libraryVisibility: Binding<Bool>?
+    private var patchTarget: (track: UUID?, targets: [UUID?])?
+
+    static func openPatch(show: ShowController, track: UUID?, targets: [UUID?]) {
+        let presenter = patchPresenter
+        presenter.bind(show)
+        if let panel = presenter.windows[.patch], presenter.patchTarget?.track == track,
+           presenter.patchTarget?.targets == targets {
+            presenter.reveal(panel, activates: false)
+            return
+        }
+        if let previous = presenter.windows.removeValue(forKey: .patch) {
+            previous.close()
+            DispatchQueue.main.async { previous.contentView = nil }
+        }
+        presenter.patchTarget = (track, targets)
+        presenter.present(.patch, title: "Patch", size: PatchEditor.windowSize) { panel in
+            PatchEditor(show: show, track: track, targets: targets)
+                .onExitCommand { [weak panel] in panel?.performClose(nil) }
+        }
+    }
+
+    static func closePatch(for show: ShowController) {
+        if patchPresenter.show === show { patchPresenter.windows[.patch]?.close() }
+    }
+
+    // These handlers travel through every hosted timeline row. Give them
+    // window lifetime, even when transport state changes the workspace view.
+    func updateItemActions(show: ShowController, library: Binding<Bool>) {
+        itemActionShow = show
+        libraryVisibility = library
+    }
+    private(set) lazy var editTextAction: (UUID) -> Void = { [weak self] id in
+        guard let self, let show = self.itemActionShow else { return }
+        self.openTextItem(show: show, id: id)
+    }
+    private(set) lazy var clipFXAction: (UUID) -> Void = { [weak self] id in
+        guard let self, let show = self.itemActionShow else { return }
+        FXWindows.shared.openClipChain(show: show, clip: id, openLibrary: { [weak self] in self?.libraryVisibility?.wrappedValue = true })
+    }
+    private(set) lazy var fullLyricsAction: (UUID) -> Void = { [weak self] id in
+        guard let self, let show = self.itemActionShow else { return }
+        self.openFullLyrics(show: show, track: id)
+    }
 
     private func bind(_ show: ShowController) {
         guard self.show !== show else { return }
@@ -259,6 +326,22 @@ private struct WorkspaceToolContent<Content: View>: View {
         }
         advancedOpen = true
     }
+    func openGrandMA2(show: ShowController) {
+        bind(show)
+        present(.grandMA2, title: "grandMA2", size: NSSize(width: 720, height: 650)) { _ in
+            GrandMA2SettingsView(show: show)
+        }
+        if !grandMA2Open { grandMA2Open = true }
+    }
+    func openResolume(show: ShowController) {
+        bind(show)
+        let height: CGFloat = show.snapshot.project.resolume?.usesIntegration == true ? 660 : 560
+        present(.resolume, title: "Resolume", size: NSSize(width: 680, height: height)) { panel in
+            ResolumeSettingsView(show: show)
+                .environment(\.workspaceEditorDismiss, { [weak panel] in panel?.performClose(nil) })
+        }
+        if !resolumeOpen { resolumeOpen = true }
+    }
     func openMatrixPatch(show: ShowController) {
         bind(show)
         present(.matrixPatch, title: "Matrix Patch", size: NSSize(width: 1000, height: 650)) { _ in
@@ -278,14 +361,18 @@ private struct WorkspaceToolContent<Content: View>: View {
         }
         settingsOpen = true
     }
+    private func reveal(_ panel: NSPanel, activates: Bool) {
+        if !panel.isVisible {
+            panel.contentView?.isHidden = false
+        }
+        ProjectionWindow.presentWorkspaceWindow(panel, activates: activates)
+    }
     private func present<Content: View>(_ tool: Tool, title: String, size: NSSize,
                                        @ViewBuilder content: (NSPanel) -> Content) {
+        let integration = tool == .grandMA2 || tool == .resolume
+        let needsFocus = tool == .textItem || tool == .fullLyrics
         if let panel = windows[tool] {
-            if !panel.isVisible {
-                panel.contentView?.isHidden = false
-                attachWorkspacePanel(panel)
-            }
-            ProjectionWindow.presentWorkspaceWindow(panel)
+            reveal(panel, activates: needsFocus)
             return
         }
         let expandable = tool == .matrixPatch
@@ -301,13 +388,13 @@ private struct WorkspaceToolContent<Content: View>: View {
             panel.collectionBehavior.insert(.fullScreenAuxiliary)
         }
         panel.delegate = self
-        let editor = WorkspaceToolContent(content: content(panel), updateTitle: { [weak panel] in
+        let editor = WorkspaceToolContent(content: content(panel), fillsViewport: tool == .patch, updateTitle: { [weak panel] in
             panel?.title = JarasLocalization.string(title)
         })
         // Settings and the text editor own their scrolling and fill the window.
         // Advanced has a fixed minimum canvas; scroll that canvas only if the
         // available screen cannot fit it, without asking it for an ideal size.
-        let host = WorkspaceEditorHostingView(rootView: WorkspaceEditorViewport(content: editor, scrolls: tool == .advanced, layoutSize: tool == .advanced ? size : nil).interfaceScaled())
+        let host = WorkspaceEditorHostingView(rootView: WorkspaceEditorViewport(content: editor, scrolls: tool == .advanced || integration, layoutSize: tool == .advanced ? size : nil).interfaceScaled())
         if #available(macOS 13, *) { host.sizingOptions = [] }
         if #available(macOS 13.3, *) { host.safeAreaRegions = [] }
         panel.contentView = host
@@ -320,7 +407,7 @@ private struct WorkspaceToolContent<Content: View>: View {
         panel.center()
         windows[tool] = panel
         attachWorkspacePanel(panel)
-        ProjectionWindow.presentWorkspaceWindow(panel)
+        ProjectionWindow.presentWorkspaceWindow(panel, activates: needsFocus)
     }
     func windowWillUseStandardFrame(_ window: NSWindow, defaultFrame newFrame: NSRect) -> NSRect {
         if window === windows[.matrixPatch] { return window.screen?.visibleFrame ?? newFrame }
@@ -330,23 +417,28 @@ private struct WorkspaceToolContent<Content: View>: View {
         guard let panel = notification.object as? NSPanel,
               let tool = windows.first(where: { $0.value === panel })?.key else { return }
         panel.parent?.removeChildWindow(panel)
-        if tool == .settings { settingsOpen = false; ControlMappings.shared.editing = nil }
+        if tool == .settings { settingsOpen = false; ControlMappings.shared.endEditing() }
         if tool == .matrixPatch { matrixPatchOpen = false }
         if tool == .advanced { advancedOpen = false }
-        if !discardingWindows && tool != .textItem && tool != .fullLyrics {
+        if tool == .grandMA2 { grandMA2Open = false }
+        if tool == .resolume { resolumeOpen = false }
+        if !discardingWindows && [.settings, .matrixPatch, .advanced, .patch].contains(tool) {
             // Keep the hosting tree and native window; hide it from layout,
             // hit testing and accessibility until the next presentation.
-            panel.contentView?.isHidden = true
+            DispatchQueue.main.async { [weak panel] in
+                if let panel, !panel.isVisible { panel.contentView?.isHidden = true }
+            }
             return
         }
         windows.removeValue(forKey: tool)
-        panel.contentView = nil
+        DispatchQueue.main.async { panel.contentView = nil }
     }
     func closeAll() {
         discardingWindows = true
         for panel in Array(windows.values) { panel.close(); panel.contentView = nil }
         windows.removeAll()
         discardingWindows = false
+        patchTarget = nil
         settingsOpen = false
         matrixPatchOpen = false
         advancedOpen = false
@@ -446,7 +538,8 @@ private struct WorkspaceEditorPresenter<Content: View>: NSViewRepresentable {
         func close(notify: Bool) {
             guard let panel else { return }
             detach(panel)
-            panel.orderOut(nil)
+            // close() already orders out the panel and hands focus back.
+            // Doing both makes AppKit process the workspace's focus twice.
             panel.close()
             if notify { presented?.wrappedValue = false }
         }
@@ -504,9 +597,10 @@ extension View {
         #endif
     }
     @ViewBuilder func workspaceEditor<Item: Identifiable, Content: View>(_ title: String, item: Binding<Item?>, scrolls: Bool = true,
-        size: CGSize? = nil, canClose: @escaping () -> Bool = { true }, @ViewBuilder content: @escaping (Item) -> Content) -> some View {
+        size: CGSize? = nil, canClose: @escaping () -> Bool = { true }, activates: Bool = true,
+        @ViewBuilder content: @escaping (Item) -> Content) -> some View {
         #if os(macOS)
-        background(WorkspaceEditorPresenter(presented: Binding(get: { item.wrappedValue != nil }, set: { if !$0 { item.wrappedValue = nil } }), title: title, scrolls: scrolls, size: size, canClose: canClose) {
+        background(WorkspaceEditorPresenter(presented: Binding(get: { item.wrappedValue != nil }, set: { if !$0 { item.wrappedValue = nil } }), title: title, scrolls: scrolls, size: size, canClose: canClose, activates: activates) {
             if let value = item.wrappedValue { content(value) }
         }.frame(width: 0, height: 0))
         #else

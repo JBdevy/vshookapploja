@@ -113,61 +113,74 @@ struct FXKnob: View {
         }.frame(maxWidth: dialOnly ? diameter : .infinity).jarasHelp("Drag vertically. Double-click to reset.")
     }
 }
-struct ArpeggioPatternPreview: View {
-    @State private var chord = 0
-    private let chords = ["C", "Cm", "Cmaj7"]
-    private var pitches: [Int] { [[0, 4, 7], [0, 3, 7], [0, 4, 7, 11]][chord] }
+struct ArpeggiatorControls: View {
+    @Binding var parameters: NativeArpeggiatorSettings
+    private let pitches = [60, 64, 67]
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Text(verbatim: "Pattern preview").font(.jarasSystem(size: 15, weight: .semibold))
                 Spacer()
-                Picker("Preview chord", selection: $chord) {
-                    ForEach(chords.indices, id: \.self) { index in Text(verbatim: chords[index]).tag(index) }
-                }.pickerStyle(.segmented).labelsHidden().frame(width: 158).accessibilityLabel("Preview chord")
+                Toggle("Sync", isOn: $parameters.sync).toggleStyle(.switch).tint(JarasTheme.green)
             }
             Canvas { context, size in
-                let left: CGFloat = 30, top: CGFloat = 20
-                let step = max(1, (size.width - left) / 16)
-                let lane = (size.height - top) / 12
+                let count = parameters.division
+                let step = size.width / CGFloat(count)
+                let lanes = parameters.octaves * pitches.count
+                let lane = size.height / CGFloat(lanes)
                 let color = NativeFXAppearance.violet
-                for column in 0..<16 {
-                    let x = left + CGFloat(column) * step
-                    if column.isMultiple(of: 4) {
-                        context.draw(Text(verbatim: String(column / 4 + 1)).font(.jarasCaption2).foregroundColor(.white),
-                                     at: CGPoint(x: x + 3, y: 7), anchor: .leading)
-                    }
-                    let stroke = CGRect(x: x, y: top, width: 1, height: size.height - top)
-                    context.fill(Path(stroke), with: .color(.white.opacity(column.isMultiple(of: 4) ? 0.23 : 0.065)))
-                }
-                for (index, pitch) in pitches.enumerated() {
-                    let y = top + CGFloat(11 - pitch) * lane
-                    let name = ["C", chord == 1 ? "E♭" : "E", "G", "B"][index]
-                    context.draw(Text(verbatim: name).font(.jarasCaption2).foregroundColor(color),
-                                 at: CGPoint(x: 0, y: y + lane / 2), anchor: .leading)
-                    context.fill(Path(CGRect(x: left, y: y, width: size.width - left, height: lane)),
-                                 with: .color(color.opacity(0.06)))
-                }
-                for column in 0..<16 {
-                    let pitch = pitches[column % pitches.count]
-                    let rect = CGRect(x: left + CGFloat(column) * step + 1, y: top + CGFloat(11 - pitch) * lane + 1,
-                                      width: step * 0.75, height: max(2, lane - 2))
+                for column in 0..<count {
+                    let x = CGFloat(column) * step
+                    let stroke = CGRect(x: x, y: 0, width: 1, height: size.height)
+                    context.fill(Path(stroke), with: .color(.white.opacity(column.isMultiple(of: max(1, count / 4)) ? 0.23 : 0.08)))
+                    let pitch = parameters.step(column, count: pitches.count) { pitches[$0] }
+                    let row = lanes - 1 - (pitch.transpose / 12 * pitches.count + pitch.note)
+                    let rect = CGRect(x: x, y: CGFloat(row) * lane + 1,
+                                      width: max(1, step * parameters.gateFraction), height: max(1, lane - 2))
                     context.fill(Path(roundedRect: rect, cornerRadius: 2), with: .color(color))
                 }
-            }.frame(height: 122).accessibilityHidden(true)
-            HStack(spacing: 22) {
-                readout("Direction", "Ascending")
-                readout("Rate", "1/16")
-                readout("Gate", "75%")
+            }.frame(height: 112).accessibilityHidden(true)
+            HStack(alignment: .top, spacing: 14) {
+                control("Rate") {
+                    Picker("Rate", selection: $parameters.division) {
+                        ForEach(NativeArpeggiatorSettings.divisions, id: \.self) { rate in
+                            Text(verbatim: rate.isMultiple(of: 3) ? "1/\(rate * 2 / 3)T" : "1/\(rate)").tag(rate)
+                        }
+                    }.labelsHidden().pickerStyle(.menu)
+                }
+                control("Direction") {
+                    Picker("Direction", selection: $parameters.direction) {
+                        ForEach(NativeArpeggiatorSettings.directions.indices, id: \.self) { index in
+                            Text(verbatim: NativeArpeggiatorSettings.directions[index]).tag(index)
+                        }
+                    }.labelsHidden().pickerStyle(.menu)
+                }
+                control("Octaves") {
+                    Picker("Octaves", selection: $parameters.octaves) {
+                        ForEach(1...4, id: \.self) { value in Text(verbatim: String(value)).tag(value) }
+                    }.labelsHidden().pickerStyle(.menu)
+                }
+                control("Gate") {
+                    Stepper(value: $parameters.gate, in: 5...100) {
+                        Text(verbatim: "\(parameters.gate)%").monospacedDigit()
+                    }.accessibilityLabel("Gate").accessibilityValue("\(parameters.gate)%")
+                }
+                control("BPM") {
+                    Stepper(value: $parameters.bpm, in: 20...400) {
+                        Text(verbatim: String(parameters.bpm)).monospacedDigit()
+                    }.accessibilityLabel("BPM").accessibilityValue(String(parameters.bpm)).disabled(parameters.sync)
+                }
             }
         }.padding(16).nativeFXRack()
     }
 
-    private func readout(_ label: String, _ value: String) -> some View {
-        HStack(spacing: 6) {
-            Text(verbatim: label).foregroundStyle(Color.white.opacity(0.62))
-            Text(verbatim: value).foregroundStyle(.white)
+    private func control<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(verbatim: label).foregroundStyle(Color.white.opacity(0.72))
+            content()
         }.font(.jarasSystem(size: 12, weight: .medium))
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

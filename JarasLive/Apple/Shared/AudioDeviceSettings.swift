@@ -269,19 +269,26 @@ private let outputDevicePropertyListener: AudioUnitPropertyListenerProc = { cont
             Task { @MainActor [weak self] in self?.refreshMIDI() }
         }
         refreshMIDI()
-        refresh()
         #if os(iOS)
+        refresh()
         observeMobileSession()
         #endif
         #if os(macOS)
+        // A driver may wait while opening its IOKit service. The project
+        // window can load before the first hardware catalog is available.
         let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
             Task { @MainActor [weak self] in self?.scheduleCatalogRefresh() }
         }
         deviceListener = listener
-        for selector in [kAudioHardwarePropertyDevices, kAudioHardwarePropertyDefaultOutputDevice, kAudioHardwarePropertyDefaultInputDevice] {
-            var address = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
-            if AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, .main, listener) == noErr { listeningAddresses.append(address) }
+        catalogWorker.async { [weak self] in
+            var registered: [AudioObjectPropertyAddress] = []
+            for selector in [kAudioHardwarePropertyDevices, kAudioHardwarePropertyDefaultOutputDevice, kAudioHardwarePropertyDefaultInputDevice] {
+                var address = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+                if AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, .main, listener) == noErr { registered.append(address) }
+            }
+            Task { @MainActor [weak self, registered] in self?.listeningAddresses = registered }
         }
+        scheduleCatalogRefresh(coalesce: false)
         #endif
     }
     func refreshMIDI() {
@@ -353,13 +360,15 @@ private let outputDevicePropertyListener: AudioUnitPropertyListenerProc = { cont
         return "MIDI \(slot + 1) · " + name
     }
     #if os(macOS)
-    private func scheduleCatalogRefresh() {
+    private func scheduleCatalogRefresh(coalesce: Bool = true) {
         catalogRefresh?.cancel()
         catalogRefresh = Task { @MainActor [weak self] in
             // One USB-C disconnect can publish the device list and both
             // default-device properties. Keep the HAL scan out of AppKit's
             // synchronous display-change and playback update paths.
-            do { try await Task.sleep(nanoseconds: 45_000_000) } catch { return }
+            if coalesce {
+                do { try await Task.sleep(nanoseconds: 45_000_000) } catch { return }
+            }
             guard let worker = self?.catalogWorker else { return }
             let catalog = await withCheckedContinuation { continuation in
                 worker.async { continuation.resume(returning: Self.readHardwareCatalog()) }

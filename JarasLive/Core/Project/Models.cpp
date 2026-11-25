@@ -1,3 +1,4 @@
+#include "../Tracks/ElasticTime.hpp"
 #include <map>
 #include <functional>
 #include "Models.hpp"
@@ -575,6 +576,7 @@ void validate(const Project& p) {
                 require(finite(clip.startTime) && finite(clip.duration) && clip.startTime >= 0 && clip.duration > 0 && clip.startTime + clip.duration <= s.duration, "Invalid clip interval");
                 require(finite(clip.playbackRate) && clip.playbackRate >= 1.0/32 && clip.playbackRate <= 32, "Invalid clip playback rate");
                 std::set<ID> tempoReferenceIDs;
+                require(elastic::valid(clip.elasticPoints) && std::isfinite(clip.elasticSourceScale) && clip.elasticSourceScale > 0, "Invalid elastic points");
                 for(const auto& reference:clip.tempoRateReferences)
                     require(!reference.markerID.empty() && tempoReferenceIDs.insert(reference.markerID).second && finite(reference.rate) && reference.rate>0,"Invalid item tempo reference");
                 require(!clip.tempoBasePlaybackRate || (finite(*clip.tempoBasePlaybackRate) && *clip.tempoBasePlaybackRate >= 1.0/32 && *clip.tempoBasePlaybackRate <= 32), "Invalid tempo playback reference");

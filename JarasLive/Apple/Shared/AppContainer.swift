@@ -224,7 +224,10 @@ enum AppStartupPresentation {
                 repeatWasEnabled = repeatEnabled
                 do {
                     try audio.update(snapshot, revision: revision, sampledAt: show?.timelinePlaybackSampleTime ?? ProcessInfo.processInfo.systemUptime)
-                    if foreground { TrackRecording.shared.observe(snapshot); VideoPlayback.shared.update(snapshot, revision: show?.projectRevision ?? revision) }
+                    if foreground, let show {
+                        TrackRecording.shared.observe(snapshot, playbackAdvance: show.timelinePlaybackAdvance)
+                        VideoPlayback.shared.update(snapshot, revision: show.projectRevision)
+                    }
                     if foreground, repeatEnabled, let start = snapshot.transport.loop.start, let end = snapshot.transport.loop.end, let song = snapshot.transport.songId {
                         TimelineAreaSelection.shared.update(song: song, from: start, to: end)
                     }
@@ -295,6 +298,7 @@ enum AppStartupPresentation {
             }
             #endif
             show.audioRouting = { audio.previewRouting($0) }
+            show.audioSendGain = { audio.previewTrackSendGain($0, gain: $1) }
             show.audioMatrixPatch = { audio.previewMatrixPatch(routes: $0, outputs: $1, master: $2) }
             show.audioPatches = { [weak show] track, patches in
                 audio.previewPatches(track, patches: patches)
@@ -773,6 +777,7 @@ enum AppStartupPresentation {
             do {
                 if project.show.hasUnsavedChanges && !project.documents.isTemporary {
                     let alert = NSAlert()
+                    alert.icon = ProjectSaveAlert.appIcon
                     alert.messageText = JarasLocalization.string("Do you want to save this project?")
                     alert.informativeText = project.show.snapshot.project.name
                     alert.addButton(withTitle: JarasLocalization.string("Save"))

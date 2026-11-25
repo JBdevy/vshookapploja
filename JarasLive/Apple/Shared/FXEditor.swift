@@ -143,7 +143,9 @@ struct FXEditor: View {
                 Toggle(enabledTitle, isOn: Binding(get: { settings.arpeggiatorEnabled == true },
                                                 set: { settings.arpeggiatorEnabled = $0 }))
                     .toggleStyle(.switch).tint(JarasTheme.green)
-                ArpeggioPatternPreview()
+                ArpeggiatorControls(parameters: Binding(
+                    get: { settings.arpeggiator ?? NativeArpeggiatorSettings() },
+                    set: { settings.arpeggiator = $0 }))
             case "Chorus", "Phaser", "Amp", "Gate Divisor", "Soft Clipper":
                 if let effect = NativeCreativeEffect(rawValue: page) { creativeEditor(effect) }
             default:

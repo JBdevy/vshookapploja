@@ -862,7 +862,7 @@ final class MarkerEditClickView: RightClickTargetView, NativeTimelineInputObserv
     private var didDrag = false
     private var tracking: NSTrackingArea?
     private var inputAvailable: Bool {
-        !interactionBlocked && !RightClickRouter.shared.interactionBlocked && !NativeTimelineInputGate.shared.isBlocked(window) && window?.attachedSheet == nil && !isHiddenOrHasHiddenAncestor
+        !interactionBlocked && !NativeTimelineInputGate.shared.isBlocked(window) && window?.attachedSheet == nil && !isHiddenOrHasHiddenAncestor
     }
     override func resetCursorRects() {
         if nativeInputBounds == nil, drag != nil, inputAvailable { addCursorRect(bounds, cursor: moveCursor) }
@@ -884,7 +884,7 @@ final class MarkerEditClickView: RightClickTargetView, NativeTimelineInputObserv
     override var priority: Int { 110 }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? {
-        guard !interactionBlocked, !RightClickRouter.shared.interactionBlocked, window?.attachedSheet == nil,
+        guard !interactionBlocked, !NativeTimelineInputGate.shared.isBlocked(window), window?.attachedSheet == nil,
               !isHiddenOrHasHiddenAncestor, let event = NSApp.currentEvent,
               [.leftMouseDown, .leftMouseUp, .leftMouseDragged].contains(event.type),
               !event.modifierFlags.contains(.option), !event.modifierFlags.contains(.control),

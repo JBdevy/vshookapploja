@@ -1,6 +1,9 @@
 #import "JarasEffects.h"
 #include "JarasOutputChannelMap.hpp"
 #include "JarasRealtimeClock.hpp"
+#include "../../Core/Tracks/OverlapCrossfade.hpp"
+#include "../../Core/Audio/RealtimeBorrowedPointer.hpp"
+#include "../../Core/Audio/DiskIOActivity.hpp"
 #include "../../Core/Include/CatDynamicsDSP.hpp"
 #include "CatMIDISequenceBridge.h"
 #include "../../Core/Audio/CreativeEffects.hpp"
@@ -25,6 +28,10 @@
 #include "JarasPadSource.inc"
 
 #include "../../Core/MIDI/ChordName.hpp"
+
+void JarasBeginAudioDiskIO(void) { catlive::audio::diskIOActivity.begin(); }
+void JarasEndAudioDiskIO(void) { catlive::audio::diskIOActivity.end(); }
+int64_t JarasAudioDiskOccupiedNanoseconds(void) { return catlive::audio::diskIOActivity.occupiedNanoseconds(); }
 
 @implementation JarasRemoteMainAudio {
     jaras::audio::RemoteMainAudio audio;
@@ -149,9 +156,11 @@ static void updateEffectSilenceFlag(AudioUnitRenderActionFlags* flags,
 struct StereoLevelPeaks {
     std::atomic<bool> enabled{false};
     std::array<std::atomic<float>,2> peaks{};
+    std::atomic<float> rms{0};
     StereoLevelPeaks() { for(auto& peak:peaks) peak.store(0,std::memory_order_relaxed); }
     void capture(const AudioBufferList *buffers,unsigned frames) {
         if(!enabled.load(std::memory_order_relaxed) || !frames || !buffers->mNumberBuffers) return;
+        float level=0;
         for(unsigned ch=0;ch<2;++ch) {
             const auto& buffer=buffers->mBuffers[std::min(ch,buffers->mNumberBuffers-1)];
             auto data=static_cast<const float*>(buffer.mData);
@@ -162,11 +171,19 @@ struct StereoLevelPeaks {
             vDSP_maxmgv(data,stride,&peak,frames);
             float old=peaks[ch].load(std::memory_order_relaxed);
             while(peak>old && !peaks[ch].compare_exchange_weak(old,peak,std::memory_order_relaxed)) {}
+            if (peak > 0.0001f) {
+                float channelRMS=0;
+                vDSP_rmsqv(data,stride,&channelRMS,frames);
+                level=std::max(level,channelRMS);
+            }
         }
+        float old=rms.load(std::memory_order_relaxed);
+        while(level>old && !rms.compare_exchange_weak(old,level,std::memory_order_relaxed)) {}
     }
     float take(NSUInteger channel) {
         return channel<peaks.size() ? peaks[channel].exchange(0,std::memory_order_relaxed) : 0;
     }
+    float takeRMS() { return rms.exchange(0,std::memory_order_relaxed); }
 };
 // Storage is prepared on the control thread. The render block uses only
 // bounded arithmetic and atomic snapshots, never locks, files or allocations.
@@ -354,6 +371,20 @@ struct VoiceGainKernel {
 // segments. The control thread publishes bounded atomic snapshots; rendering
 // never allocates, locks, or rebuilds the graph.
 struct ItemFadeKernel {
+    std::vector<jaras::overlap::Ramp> envelope;
+    catlive::audio::RealtimeBorrowedPointer<std::vector<jaras::overlap::Ramp>> publishedEnvelope;
+    std::atomic<bool> hasEnvelope{false};
+    void setEnvelope(NSData *data) {
+        using Ramp = jaras::overlap::Ramp;
+        hasEnvelope.store(false);
+        publishedEnvelope.withdrawAndWait();
+        envelope.resize(data.length / sizeof(Ramp));
+        if (!envelope.empty()) {
+            memcpy(envelope.data(), data.bytes, envelope.size()*sizeof(Ramp));
+            publishedEnvelope.publish(&envelope);
+            hasEnvelope.store(true);
+        }
+    }
     std::atomic<uint64_t> boundaryHost{0};
     void gate(AudioBufferList* buffers,unsigned frames,const AudioTimeStamp* time) {
         const auto physical = jaras::physicalRenderTime(*time, rate); time = &physical;
@@ -397,7 +428,8 @@ struct ItemFadeKernel {
         }
         const double duration=parameters[2];
         const double in=std::min(duration,parameters[0]), out=std::min(duration,parameters[1]);
-        if(duration<=0 || (in<=0 && out<=0)) return;
+        const bool overlap = hasEnvelope.load(std::memory_order_acquire);
+        if(duration<=0 || (in<=0 && out<=0 && !overlap)) return;
         double position=parameters[3];
         if(parameters[4]>0 && (time->mFlags&kAudioTimeStampHostTimeValid))
             position+=double(time->mHostTime)*hostSecondsPerTick-parameters[4];
@@ -405,11 +437,13 @@ struct ItemFadeKernel {
         else return;
         // Outside both edge ramps the envelope is exactly unity. Keep the
         // original sample loop for blocks crossing an edge or overlapping fades.
-        if(!frames || ((in<=0 || position>=in) &&
+        if(!frames || (!overlap && (in<=0 || position>=in) &&
            (out<=0 || duration-(position+double(frames-1)/rate)>=out))) return;
+        auto lease = publishedEnvelope.read();
+        const auto *ramps = lease.get();
         for(unsigned frame=0;frame<frames;++frame) {
             const double t=position+double(frame)/rate;
-            const float gain=float((in>0?shaped(t/in,parameters[6],parameters[7]):1)*(out>0?shaped((duration-t)/out,parameters[8],parameters[9]):1));
+            const float gain=float((ramps ? jaras::overlap::gain(*ramps,t) : 1.)*(in>0?shaped(t/in,parameters[6],parameters[7]):1)*(out>0?shaped((duration-t)/out,parameters[8],parameters[9]):1));
             for(unsigned ch=0;ch<buffers->mNumberBuffers;++ch) {
                 auto& buffer=buffers->mBuffers[ch]; auto data=static_cast<float*>(buffer.mData);
                 if(!data) continue;
@@ -655,10 +689,13 @@ struct EQKernel {
 + (void)setOutputMeteringEnabled:(AVAudioUnitEffect *)node enabled:(BOOL)enabled {
     auto &peaks=((JarasEQAudioUnit *)node.AUAudioUnit)->kernel.outputPeaks;
     peaks.enabled.store(enabled,std::memory_order_relaxed);
-    if(!enabled) { peaks.take(0); peaks.take(1); }
+    if(!enabled) { peaks.take(0); peaks.take(1); peaks.takeRMS(); }
 }
 + (float)takeOutputPeak:(AVAudioUnitEffect *)node channel:(NSUInteger)channel {
     return ((JarasEQAudioUnit *)node.AUAudioUnit)->kernel.outputPeaks.take(channel);
+}
++ (float)takeOutputRMS:(AVAudioUnitEffect *)node {
+    return ((JarasEQAudioUnit *)node.AUAudioUnit)->kernel.outputPeaks.takeRMS();
 }
 + (AVAudioUnitEffect *)makeNode {
     static dispatch_once_t once;
@@ -686,6 +723,17 @@ struct EQKernel {
 }
 + (BOOL)isPadReleaseComplete:(AVAudioUnitEffect *)node {
     return ((JarasEQAudioUnit *)node.AUAudioUnit)->kernel.padReleaseComplete.load(std::memory_order_acquire);
+}
++ (NSDictionary<NSString *, NSData *> *)overlapEnvelopes:(NSArray<NSArray *> *)items {
+    std::vector<jaras::overlap::Item> entries;
+    for (NSArray *item in items) entries.push_back({[item[0] UTF8String], [item[1] doubleValue], [item[2] doubleValue]});
+    NSMutableDictionary *result = [NSMutableDictionary dictionary];
+    for (const auto &[id, ramps] : jaras::overlap::compile(std::move(entries)))
+        result[[NSString stringWithUTF8String:id.c_str()]] = [NSData dataWithBytes:ramps.data() length:ramps.size()*sizeof(jaras::overlap::Ramp)];
+    return result;
+}
++ (void)setOverlapEnvelope:(AVAudioUnitEffect *)node data:(NSData *)data {
+    ((JarasEQAudioUnit *)node.AUAudioUnit)->kernel.fade.setEnvelope(data);
 }
 + (void)setInputFade:(AVAudioUnitEffect *)node fadeIn:(double)fadeIn fadeOut:(double)fadeOut duration:(double)duration position:(double)position hostTime:(uint64_t)hostTime sampleTime:(double)sampleTime {
     if(!std::isfinite(fadeIn)||!std::isfinite(fadeOut)||!std::isfinite(duration)||!std::isfinite(position)||!std::isfinite(sampleTime)) return;
@@ -1413,10 +1461,13 @@ struct ChannelRouteKernel {
 + (void)setInputMeteringEnabled:(AVAudioUnitEffect *)node enabled:(BOOL)enabled {
     auto &peaks=((JarasChannelRouteUnit *)node.AUAudioUnit)->route.inputPeaks;
     peaks.enabled.store(enabled,std::memory_order_relaxed);
-    if(!enabled) { peaks.take(0); peaks.take(1); }
+    if(!enabled) { peaks.take(0); peaks.take(1); peaks.takeRMS(); }
 }
 + (float)takeInputPeak:(AVAudioUnitEffect *)node channel:(NSUInteger)channel {
     return ((JarasChannelRouteUnit *)node.AUAudioUnit)->route.inputPeaks.take(channel);
+}
++ (float)takeInputRMS:(AVAudioUnitEffect *)node {
+    return ((JarasChannelRouteUnit *)node.AUAudioUnit)->route.inputPeaks.takeRMS();
 }
 + (AVAudioUnitEffect *)makeNode {
     static dispatch_once_t once;
@@ -1762,3 +1813,23 @@ struct PitchFormantKernel {
     ((JarasCreativeAudioUnit *)node.AUAudioUnit)->kernel.clock.publish(position,clock,playing,start,end,tempo);
 }
 @end
+
+BOOL JarasRequestNativePlaybackReset(AVAudioUnit *node) {
+    AUAudioUnit *unit = node.AUAudioUnit;
+    if ([unit isKindOfClass:JarasVoiceGainUnit.class]) {
+        ((JarasVoiceGainUnit *)unit)->gain.resetRequested.store(true, std::memory_order_release);
+    } else if ([unit isKindOfClass:JarasEQAudioUnit.class]) {
+        ((JarasEQAudioUnit *)unit)->kernel.resetRequested.store(true, std::memory_order_release);
+        if ([unit isKindOfClass:CatItemEQCompressorAudioUnit.class])
+            ((CatItemEQCompressorAudioUnit *)unit)->compressorKernel.resetRequested.store(true, std::memory_order_release);
+    } else if ([unit isKindOfClass:JarasDynamicsAudioUnit.class]) {
+        ((JarasDynamicsAudioUnit *)unit)->kernel.resetRequested.store(true, std::memory_order_release);
+    } else if ([unit isKindOfClass:JarasPitchFormantUnit.class]) {
+        ((JarasPitchFormantUnit *)unit)->kernel.resetRequested.store(true, std::memory_order_release);
+    } else if ([unit isKindOfClass:JarasCreativeAudioUnit.class]) {
+        ((JarasCreativeAudioUnit *)unit)->kernel.resetRequested.store(true, std::memory_order_release);
+    } else {
+        return NO;
+    }
+    return YES;
+}

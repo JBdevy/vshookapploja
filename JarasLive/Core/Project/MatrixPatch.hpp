@@ -53,7 +53,10 @@ inline void toggleConnection(Song& song, const ID& source, const ID& destination
         throw std::invalid_argument("Invalid track routing");
     if (connection(*from, *to)) {
         auto remove = [](auto& values, const ID& id) { values.erase(std::remove(values.begin(), values.end(), std::optional<ID>(id)), values.end()); };
-        if (from->routing) remove(from->routing->transmitters, destination);
+        if (from->routing) {
+            remove(from->routing->transmitters, destination);
+            from->routing->sendGains.erase(destination);
+        }
         if (to->routing) {
             if (to->receivesMain()) {
                 for (auto& slot : to->routing->receives) if (slot == source) slot.reset();

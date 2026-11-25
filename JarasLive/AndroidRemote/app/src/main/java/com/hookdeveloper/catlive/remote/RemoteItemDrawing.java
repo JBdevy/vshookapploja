@@ -29,16 +29,18 @@ final class RemoteItemDrawing {
   builds++;waves.put(key,path);return path;
  }
  static int alpha(int color,float value){return (color&0xffffff)|(Math.round(255*value)<<24);}
- void draw(Canvas canvas,RectF box,JSONObject track,JSONObject clip,double sourceFraction,double visibleFraction){draw(canvas,box,track,clip,sourceFraction,visibleFraction,true);}
- void draw(Canvas canvas,RectF box,JSONObject track,JSONObject clip,double sourceFraction,double visibleFraction,boolean showHeader){
+ void draw(Canvas canvas,RectF box,JSONObject track,JSONObject clip,double sourceFraction,double visibleFraction){
+  draw(canvas,box,track,clip,sourceFraction,visibleFraction,true,false);
+ }
+ void draw(Canvas canvas,RectF box,JSONObject track,JSONObject clip,double sourceFraction,double visibleFraction,boolean showHeader,boolean inverted){
   if(box.width()<=0||box.height()<=0)return;
   boolean muted=clip.optBoolean("muted"),silenced=muted||track.optBoolean("silenced");
   int color=silenced?0xff8c8c8c:rgb(track.optLong("color",0x705264)),name=rgb(track.optLong("nameColor",0xffffff));
   float radius=3*density,header=headerHeight(box);Path outline=new Path();outline.addRoundRect(box,radius,radius,Path.Direction.CW);
   canvas.save();canvas.clipPath(outline);
-  paint.setStyle(Paint.Style.FILL);paint.setColor(color);canvas.drawRect(box,paint);
+  paint.setStyle(Paint.Style.FILL);paint.setColor(inverted&&!silenced?0xff202020:color);canvas.drawRect(box,paint);
   if(showHeader){
-  int ink=Color.luminance(color)>=.17913f?Color.BLACK:Color.WHITE;
+  int ink=inverted&&!silenced?Color.WHITE:Color.luminance(color)>=.17913f?Color.BLACK:Color.WHITE;
   RectF mute=muteRect(box);GradientDrawable face=muted?mutedButton:muteButton;
   face.setBounds(Math.round(mute.left),Math.round(mute.top),Math.round(mute.right),Math.round(mute.bottom));
   face.draw(canvas);
@@ -48,7 +50,7 @@ final class RemoteItemDrawing {
   if(available>0){String title=TextUtils.ellipsize(clip.optString("name"),new TextPaint(paint),available,TextUtils.TruncateAt.END).toString();canvas.drawText(title,titleX,box.top+header/2-(paint.ascent()+paint.descent())/2,paint);}
   }
   float waveHeight=box.height()-header;
-  if(waveHeight>0){paint.setColor(silenced?0xff808080:alpha(name,.75f));canvas.save();canvas.translate(box.left,box.top+header);canvas.clipRect(0,0,box.width(),waveHeight);canvas.drawPath(waveform(RemoteModel.id(clip,"id"),box.width(),waveHeight,sourceFraction,visibleFraction),paint);canvas.restore();}
+  if(waveHeight>0){paint.setColor(silenced?0xff808080:inverted?color:alpha(name,.75f));canvas.save();canvas.translate(box.left,box.top+header);canvas.clipRect(0,0,box.width(),waveHeight);canvas.drawPath(waveform(RemoteModel.id(clip,"id"),box.width(),waveHeight,sourceFraction,visibleFraction),paint);canvas.restore();}
   canvas.restore();paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(.6f*density);paint.setColor(alpha(color,.75f));RectF border=new RectF(box);border.inset(.3f*density,.3f*density);canvas.drawRoundRect(border,radius,radius,paint);paint.setStyle(Paint.Style.FILL);
  }
 }

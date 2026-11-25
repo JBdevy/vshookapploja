@@ -141,6 +141,10 @@ MainActor.assumeIsolated {
     settle()
     precondition(mixerBackground() == 43)
     TimelineLayoutDiagnostics.layouts.removeAll()
+    for _ in 0..<12 { mixer.layout() }
+    precondition(TimelineLayoutDiagnostics.layouts["columns-mixer", default: 0] == 0,
+                 "An unchanged mixer viewport must not relayout when AppKit invalidates its window")
+    TimelineLayoutDiagnostics.layouts.removeAll()
     for width: CGFloat in [2500, 2700, 3100, 2900, 2600, 2400] {
         zoom.documentWidth = width
         settle()
@@ -154,6 +158,15 @@ MainActor.assumeIsolated {
     precondition(TimelineLayoutDiagnostics.layouts["columns-timeline", default: 0] > 0,
         "the test must exercise timeline layout during zoom")
     let zoomLayouts = TimelineLayoutDiagnostics.layouts
+    TimelineLayoutDiagnostics.layouts.removeAll()
+    for height: CGFloat in [519, 216.5, 519, 216.5, 320] {
+        outer.setFrameSize(CGSize(width: 800, height: height))
+        settle()
+        mixer.layout()
+    }
+    precondition(TimelineLayoutDiagnostics.roots["columns-mixer", default: 0] == rootsBefore)
+    precondition(TimelineLayoutDiagnostics.layouts["columns-mixer", default: 0] == 0,
+                 "Dock height changes must clip the existing mixer rows")
     for height: CGFloat in [1200, 640, 900] {
         dimensions.height = height
         verticalDocument.setFrameSize(CGSize(width: 800, height: height))
@@ -171,6 +184,8 @@ MainActor.assumeIsolated {
     dimensions.mixerWidth = 0
     settle()
     precondition(mixer.isHidden && timeline.frame.minX == 4 && timeline.frame.width == 796)
+    precondition(TimelineLayoutDiagnostics.roots["columns-mixer", default: 0] == rootsBefore,
+                 "Hiding the mixer must retain its controls")
     dimensions.mixerWidth = 280
     dimensions.revision += 1
     settle()

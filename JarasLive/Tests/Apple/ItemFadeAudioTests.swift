@@ -24,5 +24,19 @@ for (curvature, shape) in [(0.0,1.0),(1.0,0.0),(-1.0,-0.5),(0.4,0.8)] {
         } }
     }
 }
+// The envelope also runs with both authored fades at zero.
+let overlaps = JarasEqualizer.overlapEnvelopes([["left", 0.0, 2.0], ["right", 1.0, 3.0]])
+for (key, position, inversed) in [("right", 0.25, false), ("left", 1.25, true)] {
+    JarasEqualizer.setOverlapEnvelope(effect, data: overlaps[key]!)
+    let start = Double(engine.manualRenderingSampleTime)
+    JarasEqualizer.setInputFade(effect, fadeIn: 0, fadeOut: 0, fadeInCurve: 0, fadeInSCurve: 1, fadeOutCurve: 0, fadeOutSCurve: 1, duration: 2, position: position, hostTime: 0, sampleTime: start)
+    let status = try engine.renderOffline(512, to: output)
+    precondition(status == .success)
+    for channel in 0..<2 { for sample in 0..<512 {
+        let fraction = 0.25 + Double(sample) / 48000
+        let expected = 0.25 * (inversed ? 1 - fraction : fraction)
+        precondition(abs(Double(output.floatChannelData![channel][sample]) - expected) < 0.00002, "Crossfade PCM differs from the overlap")
+    } }
+}
 engine.stop()
 print("ITEM_FADE_TWO_PARAMETERS_NATIVE_PCM_49152_SAMPLES_OK")

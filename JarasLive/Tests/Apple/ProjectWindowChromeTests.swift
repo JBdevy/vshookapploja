@@ -114,7 +114,7 @@ MainActor.assumeIsolated {
     precondition(transitionSizes.allSatisfy { $0 == homeSize || $0 == window.frame.size },
                  "Home-to-editor transition displayed an intermediate size: \(transitionSizes)")
     let available = window.screen?.visibleFrame.size ?? ProjectWindowAnchor.editorFrameSize
-    let editorMinimum = NSSize(width: min(1162, available.width), height: min(757, available.height))
+    let editorMinimum = NSSize(width: min(1339, available.width), height: min(757, available.height))
     precondition(window.minSize == editorMinimum, "outer minimum \(window.minSize) expected \(editorMinimum), frame \(window.frame)")
     precondition(window.frame.size == NSSize(width: min(1440, available.width), height: min(791, available.height)))
     anchor.editor = false; documents.folderReview = nil; anchor.update(); settle(window)

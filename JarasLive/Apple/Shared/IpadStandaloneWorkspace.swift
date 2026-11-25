@@ -76,6 +76,7 @@ import Combine
         }
         session.refreshLocalWorkspace()
         if var next = session.remoteState {
+            let recordingPosition = TrackRecording.shared.recordingDisplayPosition
             for (id, take) in LiveRecordingPreview.shared.takes {
                 guard let reservation = RecordingLaneLayout.shared.items[id],
                       let index = next.tracks.firstIndex(where: { $0.id == reservation.track }) else { continue }
@@ -83,7 +84,7 @@ import Combine
                 next.tracks[index].laneCount = max(next.tracks[index].laneCount ?? 1, lane + 1)
                 if !next.tracks[index].clips.contains(where: { $0.id == id }) {
                     next.tracks[index].clips.append(.init(id: id, name: reservation.clip.name, start: take.start,
-                        duration: max(0.01, take.duration), lane: lane, waveform: take.channels.first))
+                        duration: max(0.01, take.displayDuration(at: recordingPosition)), lane: lane, waveform: take.channels.first))
                 }
             }
             if DAWRemoteSnapshotComparison.differs(next, from: state) { state = next }
@@ -160,6 +161,10 @@ import Combine
         var track: UUID?
         var targets: [UUID?] = []
     }
+    private struct SendsTarget {
+        let request: FooterSendPicker.Request
+        let select: (UUID) -> Void
+    }
     @AppStorage(JarasInterfaceTheme.preferenceKey) private var interfaceTheme = JarasInterfaceTheme.defaultTheme
     @State private var remoteSettingsOpen = false
     @State private var remoteTeleprompter: Int?
@@ -170,6 +175,7 @@ import Combine
     @State private var detectingRegion: UUID?
     @State private var selectionTempoRequest: SelectionTempoRequest?
     @State private var homeOpen = false
+    @State private var confirmingExit = false
     @State private var addingTrack = false
     @State private var advancedOpen = false
     @State private var matrixOpen = false
@@ -187,6 +193,7 @@ import Combine
     @State private var fx: FXTarget?
     @State private var automationTrack: UUID?
     @State private var patch: PatchTarget?
+    @State private var sends: SendsTarget?
     init(show: ShowController, documents: ProjectDocuments, auth: AuthService,
          backend: any BackendClient, onExit: @escaping () -> Void) {
         self.show = show; self.documents = documents; self.auth = auth
@@ -194,16 +201,16 @@ import Combine
         _local = StateObject(wrappedValue: IpadStandalonePresentation(show: show, documents: documents))
     }
     private var dialogOpen: Bool {
-        homeOpen || clickSoundTrack != nil || remoteSettingsOpen || remoteTeleprompter != nil || patch != nil || settingsOpen || metronomeOpen || regionActions != nil || detectingRegion != nil || selectionTempoRequest != nil || sharingProject || advancedOpen || matrixOpen || addingTrack || regionLoops != nil || itemMenu != nil || editingTextItem != nil || fullLyricsTarget != nil || trackEdit != nil || fx != nil || automationTrack != nil
+        homeOpen || clickSoundTrack != nil || remoteSettingsOpen || remoteTeleprompter != nil || patch != nil || sends != nil || settingsOpen || metronomeOpen || regionActions != nil || detectingRegion != nil || selectionTempoRequest != nil || sharingProject || advancedOpen || matrixOpen || addingTrack || regionLoops != nil || itemMenu != nil || editingTextItem != nil || fullLyricsTarget != nil || trackEdit != nil || fx != nil || automationTrack != nil
     }
     var body: some View {
         VStack(spacing: 0) {
             if let state = local.state {
                 NativeRemoteWorkspace(state: state, computerName: UIDevice.current.name,
                     timer: local.timer, send: local.send, exitRemote: {
-                        onExit()
+                        confirmingExit = true
                     }, local: true, openHome: { homeOpen = true },
-                    openNativeProject: { documents.browse(onlyCatLiveProject: true) }, exportNativeAudio: { exportingAudio = true },
+                    nativeDocuments: documents, exportNativeAudio: { exportingAudio = true },
                     localShow: show, timelineFocus: local.timelineFocus, openMetronome: { metronomeOpen = true }, openRegionActions: { regionActions = $0 }, detectRegionBPM: { detectingRegion = $0 },
                     detectSelectionBPM: { selection in
                         guard let song = show.current, TimelineAreaSelection.shared.range == selection else { return }
@@ -224,13 +231,16 @@ import Combine
                         do { fullLyricsTarget = try FullLyricsTarget(show: show, track: track) }
                         catch { show.message = error.localizedDescription }
                     }, addTrackMedia: { documents.chooseNativeTrackMedia($0) },
-                    createPlaylist: { show.createRegionPlaylist(name: $0, selected: $1) },
                     addBlock: { show.addSetlistBlock(namePrefix: JarasLocalization.string("Bloco")) },
                     toggleRegionStop: { show.toggleRegionStop() }, stopsAtRegionEnd: local.stopsAtRegionEnd,
                     shareProject: { sharingProject = true },
                     groupTracks: { show.groupTracks($0) }, groupableTracks: Set((show.current?.tracks ?? []).filter { $0.kind == .standard && $0.stereoLink == nil }.map(\.id)), openRegionLoops: { regionLoops = .init(clip: $0) }, openAdvanced: { advancedOpen = true }, nativeAdvancedOpen: advancedOpen,
                     openMatrixPatch: { matrixOpen = true }, nativeMatrixOpen: matrixOpen,
                     toggleHozMixer: { hozMixerOpen.toggle() }, hozMixerOpen: hozMixerOpen, openSettings: { settingsSection = .general; settingsOpen = true }, nativeSettingsOpen: settingsOpen, openAudioSettings: { settingsSection = .audio; settingsOpen = true }, openRemoteSettings: { remoteSettingsOpen = true }, openTeleprompterRemote: { remoteTeleprompter = $0 }, remote: local.session)
+                    .environment(\.ipadMixerDialogs, IpadMixerDialogs(
+                        openPatch: { patch = .init(track: $0, targets: $1) },
+                        openSends: { sends = .init(request: $0, select: $1) }
+                    ))
             } else { ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity) }
         }
         .background(interfaceTheme.background).preferredColorScheme(.dark)
@@ -238,7 +248,7 @@ import Combine
         .onDisappear { local.stop(); IpadItemContextMenu.commands = { _, _ in [] }; IpadTimelinePointerContextMenu.contains = { _ in false } }
         .disabled(dialogOpen || audio.localSessionReconfiguring).accessibilityHidden(dialogOpen)
         .overlay { workspaceDialogs }
-        .onChange(of: show.projectSessionID) { _ in selectionTempoRequest = nil }
+        .onChange(of: show.projectSessionID) { _ in selectionTempoRequest = nil; sends = nil }
         .overlay(alignment: .bottom) {
             if audio.localSessionReconfiguring && !audio.error.isEmpty {
                 Text(verbatim: audio.error).font(.jarasCallout).multilineTextAlignment(.center)
@@ -250,6 +260,16 @@ import Combine
         .alert("Recording", isPresented: Binding(get: { !recorder.error.isEmpty }, set: { if !$0 { recorder.error = "" } })) {
             Button("OK") { recorder.error = "" }
         } message: { Text(LocalizedStringKey(recorder.error)) }
+        .alert("Exit Native?", isPresented: $confirmingExit) {
+            Button("Cancel", role: .cancel) {}
+            Button("Exit", role: .destructive, action: onExit)
+        } message: {
+            if documents.isTemporary || NativeProjectTabs.shared.projects.contains(where: { $0.documents.isTemporary }) {
+                Text("Temporary projects will be discarded. Return to the mode selection?")
+            } else {
+                Text("Close the open projects and return to the mode selection?")
+            }
+        }
         .environment(\.jarasNativePalette, true)
         .environment(\.multitrackAction, documents.openMultitrackExport)
         .environment(\.nativeGridFileDrop, documents.dropAtNativeGrid)
@@ -291,16 +311,22 @@ import Combine
         }
         var actions: [IpadItemMenuCommand] = []
         if clip.supportsRate(on: track) { actions.append(command("Config rate", { open("configRate") })) }
+        if track.kind == .standard, clip.midi == nil, clip.text == nil, !clip.isProjectionMedia,
+           (clip.audioFile ?? track.audioFile) != nil, !show.timelineItemsLocked {
+            actions.append(command("Insert Elastic Point", { show.insertElasticPoints(ids) }))
+        }
         if ids.count == 1, clip.midi != nil || (clip.audioFile ?? track.audioFile) != nil {
             actions.append(command("Editar nome", { open("name") }))
         }
         if track.kind.isText { actions.append(command("Edit", { open("text") })) }
         actions.append(command("FX", { open("fx") }))
         if track.kind == .standard || clip.isProjectionMedia {
-            actions.insert(command("Adjust volume", { open("volume") }), at: 1)
-            actions.insert(command("Adjust pan", { open("pan") }), at: 2)
+            if !show.timelineItemPanLocked { actions.insert(command("Adjust pan", { open("pan") }), at: 1) }
+            if !show.timelineItemVolumeLocked { actions.insert(command("Adjust volume", { open("volume") }), at: 1) }
         }
-        actions.append(command(clip.muted == true ? "Unmute items" : "Mute items", { show.setItemsMix(ids, muted: clip.muted != true) }))
+        if !show.timelineItemMuteLocked {
+            actions.append(command(clip.muted == true ? "Unmute items" : "Mute items", { show.setItemsMix(ids, muted: clip.muted != true) }))
+        }
         actions.append(command("Phase invert", { for item in ids { show.toggleItemPhase(item) } }))
         actions.append(command("Criar região do item", { show.regionsFromSelection(ids) }))
         if clip.midi == nil && (clip.audioFile ?? track.audioFile) != nil {
@@ -392,6 +418,22 @@ import Combine
         } else if let id = detectingRegion {
             IpadCompactModal(preferredSize: CGSize(width: 500, height: 270)) {
                 IpadRegionBPMDetection(show: show, documents: documents, region: id, close: { detectingRegion = nil })
+            }
+        } else if let sends {
+            GeometryReader { geometry in
+                ZStack {
+                    Color.black.opacity(0.18).ignoresSafeArea()
+                        .contentShape(Rectangle()).onTapGesture { self.sends = nil }
+                        .accessibilityHidden(true)
+                    FooterSendPicker(request: sends.request) { destination in
+                        self.sends = nil
+                        sends.select(destination)
+                    }.frame(width: min(sends.request.size.width, max(1, geometry.size.width - 32)),
+                            height: min(sends.request.size.height, max(1, geometry.size.height - 32)))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .shadow(color: .black.opacity(0.5), radius: 16, y: 6)
+                        .accessibilityLabel("Sends").accessibilityAddTraits(.isModal)
+                }.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         } else if let target = patch {
             IpadCompactModal(preferredSize: CGSize(width: target.targets.count > 1 ? 620 : 350, height: 540)) {
@@ -634,6 +676,7 @@ struct IpadTimelineFocus: Equatable {
 
 struct IpadTimelineViewport: Equatable {
     // Allow a ten-hour overview while retaining the useful initial song scale.
+    static let minimumSpan = 0.25
     static let maximumSpan = 10.0 * 60 * 60
     var start = 0.0
     var span = 60.0
@@ -662,7 +705,7 @@ struct IpadTimelineViewport: Equatable {
     }
     mutating func zoom(factor: Double, centeredOn time: Double) {
         guard factor.isFinite, factor > 0, time.isFinite else { return }
-        span = min(Self.maximumSpan, max(0.25, span / factor))
+        span = min(Self.maximumSpan, max(Self.minimumSpan, span / factor))
         center(on: time)
     }
     mutating func pan(pixels: Double, width: Double) {
@@ -672,7 +715,7 @@ struct IpadTimelineViewport: Equatable {
     mutating func zoom(factor: Double, anchor: Double) {
         guard factor.isFinite, factor > 0, anchor.isFinite else { return }
         let fraction = min(1, max(0, anchor)), position = start + fraction * span
-        span = min(Self.maximumSpan, max(0.25, span / factor))
+        span = min(Self.maximumSpan, max(Self.minimumSpan, span / factor))
         start = min(604800 - span, max(minimumStart, position - fraction * span))
     }
 }
@@ -1141,6 +1184,10 @@ struct IpadItemResizeHandle: UIViewRepresentable {
     var gripX: CGFloat? = nil
     var showsGrip = true
     var touchEnabled = true
+    var accessibilityName: String? = nil
+    var verticalDrag = false
+    var deleteHeld: (() -> Void)? = nil
+    var doubleTap: (() -> Void)? = nil
     let changed: (Double, Bool, Bool) -> Void
     @Environment(\.isEnabled) private var enabled
     func makeUIView(context: Context) -> IpadItemResizeControl { IpadItemResizeControl() }
@@ -1149,10 +1196,13 @@ struct IpadItemResizeHandle: UIViewRepresentable {
         view.interactionID = interactionID
         view.gripX = gripX
         view.showsGrip = showsGrip
+        view.verticalDrag = verticalDrag
+        view.deleteHeld = deleteHeld
+        view.doubleTap = doubleTap
         view.touchEnabled = touchEnabled
         view.changed = changed
         view.isEnabled = enabled
-        view.accessibilityLabel = JarasLocalization.string(left ? "Item start" : "Item end")
+        view.accessibilityLabel = JarasLocalization.string(accessibilityName ?? (left ? "Item start" : "Item end"))
     }
     static func dismantleUIView(_ view: IpadItemResizeControl, coordinator: ()) { view.cancelResize() }
 }
@@ -1174,6 +1224,46 @@ final class IpadItemResizeControl: UIControl, UIGestureRecognizerDelegate {
             drag.isEnabled = isEnabled
         }
     }
+    private static weak var heldElastic: IpadItemResizeControl?
+    var deleteHeld: (() -> Void)?
+    private var markerDeleted = false
+    static func deleteHeldMarker() -> Bool {
+        guard let control = heldElastic, let remove = control.deleteHeld else { return false }
+        if !control.markerDeleted {
+            control.markerDeleted = true
+            control.cancelResize()
+            remove()
+        }
+        return true
+    }
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if deleteHeld != nil { Self.heldElastic = self; markerDeleted = false }
+        super.touchesBegan(touches, with: event)
+    }
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if Self.heldElastic === self { Self.heldElastic = nil }
+        super.touchesEnded(touches, with: event)
+    }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if !resizing && Self.heldElastic === self { Self.heldElastic = nil }
+        super.touchesCancelled(touches, with: event)
+    }
+    var doubleTap: (() -> Void)? {
+        didSet {
+            if doubleTap != nil && resetTap == nil {
+                let tap = UITapGestureRecognizer(target: self, action: #selector(doubleTapped))
+                tap.numberOfTapsRequired = 2
+                tap.allowedTouchTypes = drag.allowedTouchTypes
+                tap.require(toFail: drag)
+                addGestureRecognizer(tap); resetTap = tap
+            } else if doubleTap == nil, let tap = resetTap { removeGestureRecognizer(tap); resetTap = nil }
+        }
+    }
+    private var resetTap: UITapGestureRecognizer?
+    @objc private func doubleTapped() {
+        if IpadHardwareKeyboardFocus.permitsInput(in: self, enabled: isEnabled) { doubleTap?() }
+    }
+    var verticalDrag = false
     private var resizing = false
     private let grip = CALayer()
     private lazy var drag = UIPanGestureRecognizer(target: self, action: #selector(dragged(_:)))
@@ -1190,12 +1280,13 @@ final class IpadItemResizeControl: UIControl, UIGestureRecognizerDelegate {
     private func updateTouchTypes() {
         let types: [UITouch.TouchType] = touchEnabled ? [.direct, .indirectPointer] : [.indirectPointer]
         drag.allowedTouchTypes = types.map { NSNumber(value: $0.rawValue) }
+        resetTap?.allowedTouchTypes = drag.allowedTouchTypes
     }
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         guard IpadHardwareKeyboardFocus.permitsInput(in: self, enabled: isEnabled) else { return false }
         guard gestureRecognizer === drag else { return true }
         let velocity = drag.velocity(in: window ?? self)
-        return abs(velocity.x) > abs(velocity.y)
+        return verticalDrag ? abs(velocity.y) > abs(velocity.x) : abs(velocity.x) > abs(velocity.y)
     }
     override func didMoveToWindow() {
         super.didMoveToWindow()
@@ -1213,20 +1304,25 @@ final class IpadItemResizeControl: UIControl, UIGestureRecognizerDelegate {
         CATransaction.commit()
     }
     @objc private func dragged(_ gesture: UIPanGestureRecognizer) {
+        let translation = gesture.translation(in: window)
+        let distance = Double(verticalDrag ? translation.y : translation.x)
         switch gesture.state {
         case .began:
             guard IpadHardwareKeyboardFocus.permitsInput(in: self, enabled: isEnabled) else { return }
+            if deleteHeld != nil { Self.heldElastic = self }
+            guard !markerDeleted else { return }
             resizing = true
-            changed?(Double(gesture.translation(in: window).x), false, false)
+            changed?(distance, false, false)
         case .changed:
             guard resizing else { return }
             guard IpadHardwareKeyboardFocus.permitsInput(in: self, enabled: isEnabled) else { cancelResize(); return }
-            changed?(Double(gesture.translation(in: window).x), false, false)
+            changed?(distance, false, false)
         case .ended:
+            if Self.heldElastic === self { Self.heldElastic = nil }
             guard resizing else { return }
             guard IpadHardwareKeyboardFocus.permitsInput(in: self, enabled: isEnabled) else { cancelResize(); return }
             resizing = false
-            changed?(Double(gesture.translation(in: window).x), true, false)
+            changed?(distance, true, false)
         case .cancelled, .failed: cancelResize()
         default: break
         }

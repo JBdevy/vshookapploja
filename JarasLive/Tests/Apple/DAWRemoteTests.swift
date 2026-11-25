@@ -76,8 +76,18 @@ let legacyTrackJSON = try JSONSerialization.jsonObject(with: Data(legacyTrackPac
 require((legacyTrackJSON["tracks"] as! [[String: Any]])[0]["linkedTrack"] == nil, "unlinked state omits optional link metadata for older peers")
 if case .state(let decoded) = try DAWRemoteWire.decode(legacyTrackPacket) {
     require(decoded.tracks[0].linkedTrack == nil, "legacy state without link metadata remains compatible")
+    require(decoded.trackMixerStripeOnly == nil && decoded.gridInvertsWaveforms == nil, "Legacy hosts may omit appearance preferences")
     require(decoded.tempoNeedsRender == nil, "older hosts without the tempo indicator remain compatible")
 } else { fatalError("legacy track state packet") }
+for enabled in [true, false] {
+    var appearance = fixture
+    appearance.trackMixerStripeOnly = enabled
+    appearance.gridInvertsWaveforms = enabled
+    if case .state(let decoded) = try DAWRemoteWire.decode(DAWRemoteWire.state(appearance)) {
+        require(decoded.trackMixerStripeOnly == enabled && decoded.gridInvertsWaveforms == enabled,
+                "Keep both explicit host appearance choices in the Remote state")
+    } else { fatalError("appearance state packet") }
+}
 for pending in [true, false] {
     var tempoFixture = fixture
     tempoFixture.tempoNeedsRender = pending
@@ -135,54 +145,28 @@ for gain in [0.01, 0.1, 1.0, 2.0] {
 require(DAWRemoteScrollRange.clamp(-200, content: 2000, viewport: 500) == 0, "track scrolling upper bound")
 require(DAWRemoteScrollRange.clamp(3000, content: 2000, viewport: 500) == 1500, "track scrolling lower bound")
 require(DAWRemoteScrollRange.clamp(50, content: 100, viewport: 500) == 0, "short list does not scroll")
-let panelStart = DAWRemotePanelWidths(track: 0.30, setlist: 0.32)
-require(panelStart.resizingTrack(by: 2) == .init(track: 1, setlist: 0), "mixer can occupy the whole content area and push grid/setlist closed")
-require(panelStart.resizingSetlist(by: -2) == .init(track: 0, setlist: 1), "setlist can occupy the whole content area and push grid/mixer closed")
-require(panelStart.resizingTrack(by: -2) == .init(track: 0, setlist: 0.32), "mixer can collapse fully while preserving setlist")
-require(panelStart.resizingSetlist(by: 2) == .init(track: 0.30, setlist: 0), "setlist can collapse fully while preserving mixer")
-let expandedTrack = panelStart.resizingTrack(by: 0.5)
-require(abs(expandedTrack.track - 0.8) < 0.000001 && abs(expandedTrack.setlist - 0.2) < 0.000001 && expandedTrack.grid < 0.000001,
-        "expanding mixer first consumes grid then pushes setlist")
-let expandedSetlist = panelStart.resizingSetlist(by: -0.5)
-require(abs(expandedSetlist.setlist - 0.82) < 0.000001 && abs(expandedSetlist.track - 0.18) < 0.000001 && expandedSetlist.grid < 0.000001,
-        "expanding setlist first consumes grid then pushes mixer")
-for delta in [0.0, 0.1, 2.0, 0.5, 0.0, -2.0, -0.1, 0.0] {
-    for widths in [panelStart.resizingTrack(by: delta), panelStart.resizingSetlist(by: delta)] {
-        require(widths.track >= 0 && widths.setlist >= 0 && widths.grid >= 0 && abs(widths.track + widths.setlist + widths.grid - 1) < 0.000001,
-                "full-range resize and reversals stay within the physical content width")
-    }
-}
-require(panelStart.resizingTrack(by: 0) == panelStart && panelStart.resizingSetlist(by: 0) == panelStart,
-        "reversing to the original pointer restores both original pane widths after either was pushed closed")
-let onlySetlist = DAWRemotePanelWidths(track: 0, setlist: 1)
-let restoredMixer = onlySetlist.resizingTrack(by: 0.3)
-require(abs(restoredMixer.track - 0.3) < 0.000001 && abs(restoredMixer.setlist - 0.7) < 0.000001,
-        "the retained mixer handle can reopen a collapsed mixer from full-screen setlist")
-let onlyMixer = DAWRemotePanelWidths(track: 1, setlist: 0)
-let restoredSetlist = onlyMixer.resizingSetlist(by: -0.3)
-require(abs(restoredSetlist.setlist - 0.3) < 0.000001 && abs(restoredSetlist.track - 0.7) < 0.000001,
-        "the retained setlist handle can reopen a collapsed setlist from full-screen mixer")
-require(onlyMixer.resizingTrack(by: -0.2).grid > 0.19 && onlySetlist.resizingSetlist(by: 0.2).grid > 0.19,
-        "retracting the full-width panel restores grid space")
-require(panelStart.resizingTrack(by: .nan) == panelStart && panelStart.resizingSetlist(by: .infinity) == panelStart,
-        "invalid drag values cannot corrupt panel layout")
-print("REMOTE_FULL_RANGE_PANEL_WIDTHS_COLLAPSE_RESTORE_AND_REVERSALS_OK")
-let nativeWidths = DAWRemotePanelWidths(track: 0.30, setlist: 0.25)
-func nativePaneWidths(available: Double, preferred: DAWRemotePanelWidths = nativeWidths) -> NativeWorkspacePanelWidths {
-    NativeWorkspacePanelWidths(preferred: preferred, reference: 1_000, available: available,
-                               minimumTrack: 338, iconWidth: 40)
+func nativePaneWidths(available: Double, trackVisible: Bool = true, setlist: Double = 0.25) -> TabletWorkspacePanelWidths {
+    TabletWorkspacePanelWidths(trackVisible: trackVisible, trackWidth: 328, setlistFraction: setlist,
+                               reference: 1_000, available: available)
 }
 let undockedPanes = nativePaneWidths(available: 1_000)
 let withFocus = nativePaneWidths(available: 760)
 let withFocusAndLibrary = nativePaneWidths(available: 455)
-require(undockedPanes.track == 338 && withFocus.track == undockedPanes.track &&
+require(undockedPanes.track == 328 && withFocus.track == undockedPanes.track &&
         withFocus.setlist == undockedPanes.setlist && withFocus.grid < undockedPanes.grid,
         "Opening a Native dock consumes only the grid while there is room")
 require(withFocusAndLibrary.track == withFocus.track && withFocusAndLibrary.grid == 0 &&
-        withFocusAndLibrary.setlist == 77, "Setlist gives up width before the Track Mixer")
+        withFocusAndLibrary.setlist == 127, "Setlist gives up width before the Track Mixer")
 require(nativePaneWidths(available: 250).track == 250 &&
-        nativePaneWidths(available: 760, preferred: .init(track: 0, setlist: 0.25)).track == 0,
-        "Minimum width yields only to the available space and a hidden Track Mixer stays hidden")
+        nativePaneWidths(available: 760, trackVisible: false).track == 0,
+        "The fixed width yields only to the available space and a hidden Track Mixer stays hidden")
+require(nativePaneWidths(available: 1_000, setlist: 0.8).track == 328 &&
+        nativePaneWidths(available: 1_000, setlist: 0).grid == 672,
+        "Resizing or hiding the Native Setlist preserves the fixed Track Mixer width")
+let remotePanes = TabletWorkspacePanelWidths(trackVisible: true, trackWidth: 320, setlistFraction: 1,
+                                             reference: 900, available: 900)
+require(remotePanes.track == 320 && remotePanes.setlist == 580 && remotePanes.grid == 0,
+        "Remote Setlist cannot resize the fixed Track Mixer")
 require(NativeRegionDrawerSwipe.expansion(x: -45, y: 5) == true &&
         NativeRegionDrawerSwipe.expansion(x: 45, y: 5) == false &&
         NativeRegionDrawerSwipe.expansion(x: -20, y: 0) == nil &&

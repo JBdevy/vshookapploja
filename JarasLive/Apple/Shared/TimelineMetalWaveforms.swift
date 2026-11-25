@@ -112,6 +112,7 @@ struct TimelineWaveformItem {
     var rect: CGRect
     var gray: Float
     var tint: SIMD4<Float>?
+    var gainPreview: Double? = nil
     var ink: SIMD4<Float> { tint ?? SIMD4(repeating: gray).withAlpha(1) }
     init(clip: AudioClip, fragments: [AudioClip], url: URL, rect: CGRect, gray: Float,
          sourcePath: String? = nil, mediaSource: TimelineMediaURLCache.Source? = nil, tint: SIMD4<Float>? = nil) {
@@ -368,7 +369,7 @@ enum TimelineMetalWaveformFrameBuilder {
             let channels = (mode == 0 || mode == 4) ? header.channels : 1
             let channelHeight = max(0, rect.maxY - waveTop - 2) / Double(channels)
             guard channelHeight > 0 else { continue }
-            let baseAmplitude = WaveformAmplitude.fullScale(channelHeight: channelHeight) * WaveformAmplitude.gain(item: item.clip.gain, normalization: item.clip.normalizationGain, inverted: item.clip.phaseInverted == true)
+            let baseAmplitude = WaveformAmplitude.fullScale(channelHeight: channelHeight) * WaveformAmplitude.gain(item: item.gainPreview ?? item.clip.gain, normalization: item.clip.normalizationGain, inverted: item.clip.phaseInverted == true)
             let localItem = rect.offsetBy(dx: -viewport.minX, dy: -viewport.minY)
             for (fragmentIndex, fragment) in item.fragments.enumerated() {
                 var firstSeam: CGFloat?
@@ -479,10 +480,13 @@ enum TimelineMetalWaveformFrameBuilder {
                             blocks = owner.blocks(cache: cache, url: item.url, header: header, start: max(0, source), end: sourceEnd, scale: rasterScale, key: key)
                         }
                         for channel in 0..<channels {
-                        let amplitude = baseAmplitude * WaveformAmplitude.panGain(item.clip.pan, channel: channel, channels: channels)
+                            let amplitude = baseAmplitude * WaveformAmplitude.panGain(item.clip.pan, channel: channel, channels: channels)
                             let sourceChannel = mode == 1 ? 0 : mode == 2 ? min(1, header.channels - 1) : mode == 3 && header.channels > 1 ? header.channels : mode == 4 && header.channels > 1 && channel < 2 ? 1 - channel : channel
                             let middle = waveTop + channelHeight * (Double(channel) + 0.5) - viewport.minY
-                            let channelRect = CGRect(x: position * scale, y: waveTop + channelHeight * Double(channel) + 0.5,
+                            let channelTop = waveTop + channelHeight * Double(channel) + 0.5
+                            let amplitudeBounds = SIMD2(Float(channelTop + 0.5 - viewport.minY),
+                                Float(max(channelTop + 0.5, channelTop + channelHeight - 1.5) - viewport.minY))
+                            let channelRect = CGRect(x: position * scale, y: channelTop,
                                 width: (end - position) * scale, height: max(0, channelHeight - 1)).intersection(rect).intersection(viewport)
                             guard !channelRect.isNull, !channelRect.isEmpty else { continue }
                             let localClip = channelRect.offsetBy(dx: -viewport.minX, dy: -viewport.minY)
@@ -498,7 +502,8 @@ enum TimelineMetalWaveformFrameBuilder {
                                 strokes.append(MetalWaveformStroke(block: block, channel: sourceChannel,
                                     scale: SIMD2(Float(sourceScale / header.rate), Float(amplitude)), translation: SIMD2(Float(x), Float(middle)),
                                     clip: localClip, color: item.ink, itemRect: localItem,
-                                    firstSeamX: firstSeam, repeatSpacing: seamSpacing, lineWidth: block.isPeakEnvelope ? 2 : contourWidth))
+                                    firstSeamX: firstSeam, repeatSpacing: seamSpacing, lineWidth: block.isPeakEnvelope ? 2 : contourWidth,
+                                    amplitudeBounds: amplitudeBounds))
                             }
                         }
                     }

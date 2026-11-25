@@ -249,8 +249,10 @@ public extension Project {
                 copy.receives = original.receives.map { $0.map(mapped) }
                 copy.transmitters = original.transmitters.map { $0.map(mapped) }
                 copy.sendTaps = nil
+                copy.sendGains = nil
                 for target in original.transmitters.compactMap({ $0 }) {
                     copy.setSendTap(original.sendTap(to: target), to: mapped(target))
+                    copy.setSendGain(original.sendGain(to: target), to: mapped(target))
                 }
                 return copy
             }
@@ -730,6 +732,7 @@ public extension Project {
                 guard var routing = songs[song].tracks[index].routing else { continue }
                 routing.receives = routing.receives.map { $0.flatMap { ids.contains($0) ? nil : $0 } }
                 routing.transmitters = routing.transmitters.map { $0.flatMap { ids.contains($0) ? nil : $0 } }
+                routing.removeUnusedSendSettings()
                 songs[song].tracks[index].routing = routing
             }
         }

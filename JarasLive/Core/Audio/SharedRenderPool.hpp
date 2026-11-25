@@ -92,7 +92,8 @@ public:
             recycle(slot.get()); ++ready;
         }
     }
-    void trimUnusedIfUnshared(bool stopped) {
+    std::vector<std::unique_ptr<State>> trimUnusedIfUnshared(bool stopped) {
+        std::vector<std::unique_ptr<State>> retired;
         std::lock_guard<std::mutex> lock(reservation);
         if (!stopped) {
             // A sole exclusive history advances in place. Shared histories
@@ -100,15 +101,16 @@ public:
             unsigned held = 0;
             for (const auto &slot : storage) {
                 const auto refs = uint32_t(slot->life.load(std::memory_order_acquire));
-                if (refs > 1 || (refs && ++held > 1)) return;
+                if (refs > 1 || (refs && ++held > 1)) return retired;
             }
         }
         while (auto unused = acquire()) {
             // Claim through the free list first: neither the render thread
             // nor a cached weak successor can observe storage being freed.
-            unused.slot->state.reset();
+            retired.push_back(std::move(unused.slot->state));
             unused.reset();
         }
+        return retired;
     }
     Lease acquire() {
         auto head = freeHead.load(std::memory_order_acquire);

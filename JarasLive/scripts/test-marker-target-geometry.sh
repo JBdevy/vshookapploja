@@ -15,11 +15,12 @@ model = model[model.index('public struct TimelineMarker:'):model.index('public s
 tempo = Path('Application/Project/TimelineTempo.swift').read_text()
 tempo = tempo[:tempo.index('public struct ProjectTimeSettings:')]
 source = Path('Apple/Shared/TimelineGridView.swift').read_text()
+bands = source[source.index('private let markerLaneHeight:'):source.index('struct TimelineBandsGlyph:')]
 source = source[source.index('private final class MarkerTargetLabelWidths'):source.index('private struct MarkerEditTargets:')]
 tests = Path('Tests/Apple/MarkerTargetGeometryTests.swift').read_text()
 theme = Path('Apple/Shared/Theme.swift').read_text()
-fonts = '#if os(macOS)\n' + theme[theme.index('enum CatLiveTypeface {'):theme.index('extension Font {')]
-Path(sys.argv[1]).write_text('import SwiftUI\nimport AppKit\nimport CoreText\n' + fonts + tempo + model + source + tests)
+fonts = theme[theme.index('enum CatLiveTypeface {'):]
+Path(sys.argv[1]).write_text('import SwiftUI\nimport AppKit\nimport CoreText\n' + fonts + tempo + model + bands + source + tests)
 PY
 swiftc -swift-version 5 -target "$(uname -m)-apple-macos12.0" Apple/Shared/TimelineVisibleClipIndex.swift "$test_dir/main.swift" -o "$test_dir/test"
 "$test_dir/test"

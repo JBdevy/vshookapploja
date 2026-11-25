@@ -27,7 +27,13 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
     JSONObject state;JSONObject visibleRegion;final RemoteModel.LayoutCache layout=new RemoteModel.LayoutCache();
     String renderedMode="";String panel="setlist",screen="",structure="",mixerStructure="",project="";
     boolean entering=false;boolean sidebarHidden=false,fullscreen=false,mixerShown=true,setlistShown=true,partsShown=false,horizontalPartsShown=false,vinhetasOpen=false;
-    float tabletMixer=.28f,tabletSetlist=.30f;
+    private static final int TRACK_ROW_PADDING = 6;
+    private static final int TRACK_ICON_WIDTH = 40;
+    private static final int TRACK_VOLUME_READOUT_WIDTH = 36;
+    private static final int TABLET_FADER_WIDTH = 186;
+    private static final int TABLET_MIXER_WIDTH =
+            2 * TRACK_ROW_PADDING + TRACK_ICON_WIDTH + TRACK_VOLUME_READOUT_WIDTH + TABLET_FADER_WIDTH;
+    float tabletSetlist=.30f;
     FrameLayout root,content;
     final RemoteFadeout fadeout=new RemoteFadeout();
     final RemoteBattery battery=new RemoteBattery();
@@ -270,11 +276,22 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         else if(tabletLayout()&&remote.mode.equals("observer")){
             buildTabletObserverContent();
         }else if(tabletLayout()&&panel.equals("grid")&&director){
-            LinearLayout panes=row(this);panes.setGravity(Gravity.TOP);content.addView(panes,new FrameLayout.LayoutParams(-1,-1));
-            if(mixerShown){View mix=buildMixer();panes.addView(mix,new LinearLayout.LayoutParams(0,-1,tabletMixer));addResize(panes,true);}
-            if(partsShown){panes.addView(buildParts(),new LinearLayout.LayoutParams(0,-1,.19f));}
-            grid=new RemoteGrid(this,this);panes.addView(grid,new LinearLayout.LayoutParams(0,-1,Math.max(.05f,1-(mixerShown?tabletMixer:0)-(setlistShown?tabletSetlist:0)-(partsShown?.19f:0))));
-            if(setlistShown){addResize(panes,false);panes.addView(buildSetlist(),new LinearLayout.LayoutParams(0,-1,tabletSetlist));}
+            TabletGridPanes panes = new TabletGridPanes();
+            content.addView(panes,new FrameLayout.LayoutParams(-1,-1));
+            if(mixerShown){
+                panes.mixer = buildMixer();
+                panes.addView(panes.mixer,new LinearLayout.LayoutParams(dp(TABLET_MIXER_WIDTH),-1));
+            }
+            if(partsShown){
+                panes.parts = buildParts();
+                panes.addView(panes.parts,new LinearLayout.LayoutParams(0,-1));
+            }
+            grid=new RemoteGrid(this,this);panes.addView(grid,new LinearLayout.LayoutParams(0,-1,1));
+            if(setlistShown){
+                addSetlistResize(panes);
+                panes.setlist = buildSetlist();
+                panes.addView(panes.setlist,new LinearLayout.LayoutParams(0,-1));
+            }
         }else if(panel.equals("mixer")){content.addView(buildMixer());}
         else if(panel.equals("setlist")){content.addView(buildSetlist());}
         else if(panel.equals("parts")){content.addView(buildParts());}
@@ -300,7 +317,53 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         cueText=label(this,"",20,TEXT);cueText.setTypeface(bold);cueText.setGravity(Gravity.CENTER);pad(cueText,18,14);cueText.setBackground(surface(0xf0000000,0xf0000000,YELLOW,16));cueText.setVisibility(View.GONE);FrameLayout.LayoutParams cueLp=new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.CENTER_HORIZONTAL);cueLp.topMargin=dp(50);cueLp.setMargins(dp(16),dp(50),dp(16),0);root.addView(cueText,cueLp);
         remote.subscribe(panel.equals("tp1")?1:panel.equals("tp2")?2:panel.equals("notices")?3:0);refresh();
     }
-    void addResize(LinearLayout panes,boolean left){View handle=new View(this);handle.setBackgroundColor(0xff444444);panes.addView(handle,new LinearLayout.LayoutParams(dp(4),-1));handle.setOnTouchListener(new View.OnTouchListener(){float x,start;public boolean onTouch(View v,MotionEvent e){if(e.getAction()==0){x=e.getRawX();start=left?tabletMixer:tabletSetlist;return true;}if(e.getAction()==1){float f=(e.getRawX()-x)/Math.max(1,panes.getWidth());if(left)tabletMixer=Math.max(.15f,Math.min(.50f,start+f));else tabletSetlist=Math.max(.18f,Math.min(.50f,start-f));buildWorkspace();return true;}return true;}});}
+    private final class TabletGridPanes extends LinearLayout {
+        View mixer, parts, setlist;
+
+        TabletGridPanes() {
+            super(MainActivity.this);
+            setOrientation(HORIZONTAL);
+            setGravity(Gravity.TOP);
+            setBaselineAligned(false);
+        }
+
+        @Override protected void onMeasure(int widthSpec, int heightSpec) {
+            int available = Math.max(0, MeasureSpec.getSize(widthSpec) - (setlist != null ? dp(4) : 0));
+            int remaining = available;
+            if (mixer != null) {
+                int width = Math.min(remaining, dp(TABLET_MIXER_WIDTH));
+                mixer.getLayoutParams().width = width;
+                remaining -= width;
+            }
+            if (parts != null) {
+                int width = Math.min(remaining, Math.round(available * .19f));
+                parts.getLayoutParams().width = width;
+                remaining -= width;
+            }
+            if (setlist != null) {
+                setlist.getLayoutParams().width = Math.min(remaining, Math.round(available * tabletSetlist));
+            }
+            super.onMeasure(widthSpec, heightSpec);
+        }
+    }
+
+    void addSetlistResize(LinearLayout panes){
+        View handle=new View(this);
+        handle.setBackgroundColor(0xff444444);
+        panes.addView(handle,new LinearLayout.LayoutParams(dp(4),-1));
+        handle.setOnTouchListener(new View.OnTouchListener(){
+            float x,start;
+            public boolean onTouch(View view,MotionEvent event){
+                if(event.getAction()==MotionEvent.ACTION_DOWN){x=event.getRawX();start=tabletSetlist;}
+                if(event.getAction()==MotionEvent.ACTION_UP){
+                    float translation=(event.getRawX()-x)/Math.max(1,panes.getWidth());
+                    tabletSetlist=Math.max(.18f,Math.min(.50f,start-translation));
+                    buildWorkspace();
+                }
+                return true;
+            }
+        });
+    }
     void choose(String target){fullscreen=false;horizontalPartsShown=false;panel=target.equals(panel)&&!target.equals("grid")?"grid":target;if(remote.mode.equals("observer")&&panel.equals("grid"))panel="setlist";grid=null;tp=null;buildWorkspace();}
     void divider(LinearLayout parent){View line=new View(this);line.setBackgroundColor(0x38ffffff);parent.addView(line,new LinearLayout.LayoutParams(-1,dp(1)));}
     private SongProgressView songProgress;
@@ -466,8 +529,8 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
             String playTitle = stopping ? "Stop" : "Play";
             play.transportIcon(stopping ? "stop" : "play", playTitle, playTitle);
             play.transportStyle(stopping ? RED : blend(0xff1d1d1d, 0xff24f06a, .45f), Color.WHITE);
-            pause.transportIcon(paused?"play":"pause",RemoteText.ui(paused?"Play":"Pause"),"");
-            pause.transportStyle(paused ? YELLOW : 0xff454545, paused ? Color.BLACK : Color.WHITE);
+            pause.transportIcon("pause",RemoteText.ui(paused?"Play":"Pause"),"");
+            pause.transportStyle(paused ? YELLOW : 0xff454545, Color.WHITE);
             pause.setEnabled(playing||paused);
             pause.setAlpha(1f);
             boolean loop = state.optBoolean("loop");
@@ -614,19 +677,21 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         horizontal.addView(middle,new LinearLayout.LayoutParams(-1,-1));
         middle.setBackground(RemoteWidgets.surface(0xff10291c,0xff07100b,0xff505050,7));
         LinearLayout display=row(this);
+        int displaySide=dp(198);
         tabletInformation=centered("",10,YELLOW,true);
         tabletInformation.setSingleLine();
         tabletInformation.setAutoSizeTextTypeUniformWithConfiguration(7,10,1,android.util.TypedValue.COMPLEX_UNIT_SP);
-        display.addView(tabletInformation,new LinearLayout.LayoutParams(0,dp(28),1));
+        display.addView(tabletInformation,new LinearLayout.LayoutParams(displaySide,dp(28)));
         current=centered("",14,TEXT,true);
         current.setSingleLine();
         current.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        display.addView(current,new LinearLayout.LayoutParams(0,dp(28),2));
+        display.addView(current,new LinearLayout.LayoutParams(0,dp(28),1));
         LinearLayout actions=row(this);actions.setGravity(Gravity.END|Gravity.CENTER_VERTICAL);
+        actions.addView(new RemoteResourceMeters(this),new LinearLayout.LayoutParams(dp(126),dp(18)));
         save=new Button(this,"",()->confirm("Deseja salvar este projeto?","","Salvar",()->remote.action("save")));
         save.icon("save",RemoteText.ui("Salvar"));
         actions.addView(save,new LinearLayout.LayoutParams(dp(72),dp(28)));
-        display.addView(actions,new LinearLayout.LayoutParams(0,dp(28),1));
+        display.addView(actions,new LinearLayout.LayoutParams(displaySide,dp(28)));
         middle.addView(display);
 
         LinearLayout controls=row(this);addTransportButtons(controls,true);
@@ -798,7 +863,8 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
 
     final class TrackRow extends LinearLayout {
         final String id;final int index;final Paint boundaryPaint=new Paint();LinearLayout strip,controls,line;TextView title,volumeReadout;Fader volume,pan;Button mute,solo,mono;RemoteIcons.IconView iconView;RemoteGroupGuide groupGuide;
-        TrackRow(String id,int index){super(MainActivity.this);this.id=id;this.index=index;setOrientation(HORIZONTAL);if(id!=null){groupGuide=new RemoteGroupGuide(MainActivity.this);addView(groupGuide,new LinearLayout.LayoutParams(0,-1));}strip=column(MainActivity.this);strip.setGravity(Gravity.CENTER_VERTICAL);pad(strip,6,id==null?2:3);addView(strip,new LinearLayout.LayoutParams(0,-1,1));
+        int stripeColor;
+        TrackRow(String id,int index){super(MainActivity.this);this.id=id;this.index=index;setOrientation(HORIZONTAL);if(id!=null){groupGuide=new RemoteGroupGuide(MainActivity.this);addView(groupGuide,new LinearLayout.LayoutParams(0,-1));}strip=column(MainActivity.this);strip.setGravity(Gravity.CENTER_VERTICAL);pad(strip,TRACK_ROW_PADDING,id==null?2:3);addView(strip,new LinearLayout.LayoutParams(0,-1,1));
             final boolean compactMaster = id == null && tabletLayout();
             final int buttonHeight = compactMaster ? 24 : 28;
             final int faderHeight = compactMaster ? 21 : 23;
@@ -818,7 +884,7 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
             patch.setTextSize(10);
             controls.addView(patch, new LinearLayout.LayoutParams(dp(compactMaster ? 36 : 42), dp(buttonHeight)));
             strip.addView(controls,new LinearLayout.LayoutParams(-1,dp(buttonHeight)));
-            line=row(MainActivity.this);volumeReadout=label(MainActivity.this,"",10,TEXT);volumeReadout.setTypeface(bold);line.setGravity(Gravity.END|Gravity.CENTER_VERTICAL);volume=new Fader(MainActivity.this,false,v->{volumeReadout.setText(v<=0?"−∞":String.format(Locale.US,"%+.1f",20*Math.log10(v)));remote.action("volume",id,v);});volume.selectVolume=MainActivity.this::selectVolume;volume.readout=false;volume.setContentDescription("Volume "+trackName());line.addView(volume,new LinearLayout.LayoutParams(0,dp(faderHeight),1));line.addView(volumeReadout,new LinearLayout.LayoutParams(dp(36),dp(faderHeight)));strip.addView(line,new LinearLayout.LayoutParams(-1,dp(faderHeight)));
+            line=row(MainActivity.this);volumeReadout=label(MainActivity.this,"",10,TEXT);volumeReadout.setTypeface(bold);line.setGravity(Gravity.END|Gravity.CENTER_VERTICAL);volume=new Fader(MainActivity.this,false,v->{volumeReadout.setText(v<=0?"−∞":String.format(Locale.US,"%+.1f",20*Math.log10(v)));remote.action("volume",id,v);});volume.selectVolume=MainActivity.this::selectVolume;volume.readout=false;volume.setContentDescription("Volume "+trackName());line.addView(volume,new LinearLayout.LayoutParams(0,dp(faderHeight),1));line.addView(volumeReadout,new LinearLayout.LayoutParams(dp(TRACK_VOLUME_READOUT_WIDTH),dp(faderHeight)));strip.addView(line,new LinearLayout.LayoutParams(-1,dp(faderHeight)));
             title=label(MainActivity.this,"",11,TEXT);
             title.setTypeface(bold);
             title.setSingleLine();
@@ -829,7 +895,7 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
                 strip.addView(title,new LinearLayout.LayoutParams(-1,dp(18)));
             }
 
-            iconView=new RemoteIcons.IconView(MainActivity.this);if(id!=null){addView(iconView,new LinearLayout.LayoutParams(dp(40),-1));}
+            iconView=new RemoteIcons.IconView(MainActivity.this);if(id!=null){addView(iconView,new LinearLayout.LayoutParams(dp(TRACK_ICON_WIDTH),-1));}
             refresh();
         }
         @Override protected void onLayout(boolean changed,int left,int top,int right,int bottom){
@@ -851,11 +917,23 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
             int edge=Math.max(1,Math.round(density*.5f));boundaryPaint.setColor(0xff181818);
             canvas.drawRect(strip.getLeft(),0,strip.getRight(),edge,boundaryPaint);
             canvas.drawRect(strip.getLeft(),getHeight()-edge,strip.getRight(),getHeight(),boundaryPaint);
+            if (stripeColor != 0) {
+                boundaryPaint.setColor(stripeColor);
+                canvas.drawRoundRect(strip.getLeft(),dp(3),strip.getLeft()+dp(5),getHeight()-dp(3),dp(2),dp(2),boundaryPaint);
+            }
         }
         String trackName(){JSONObject t=id==null?null:RemoteModel.find(RemoteModel.array(state,"tracks"),id);return t==null?"Master":t.optString("name");}
         void refresh(){JSONObject track=id==null?null:RemoteModel.find(RemoteModel.array(state,"tracks"),id);if(id!=null&&track==null)return;
-            int color=rgb(id==null?state.optLong("masterColor",0x414141):track.optLong("color",0x414141));if(track!=null&&track.optBoolean("silenced")){int gray=(Color.red(color)+Color.green(color)+Color.blue(color))/3;color=Color.rgb(gray,gray,gray);}int background=blend(0xff1d1d1d,color,track!=null&&track.optBoolean("emphasized")?.65f:.50f);setBackgroundColor(id==null?background:0xff1d1d1d);strip.setBackgroundColor(background);iconView.setBackgroundColor(background);if(groupGuide!=null)groupGuide.update(RemoteModel.array(state,"tracks"),id);
-            title.setText(id==null?"Master":String.format(Locale.US,"%02d  %s",index,track.optString("name")));iconView.update(id==null?"":track.optString("instrumentIcon",""));title.setTextColor(rgb(id==null?state.optLong("masterNameColor",0xffffff):track.optLong("nameColor",0xffffff)));
+            int surface=rgb(state.optLong("masterColor",0x414141));
+            int color=track==null?surface:rgb(track.optLong("color",0x414141));
+            boolean stripe=track!=null&&state.optBoolean("trackMixerStripeOnly",true);
+            int nextStripe=stripe?color:0;
+            if(stripeColor!=nextStripe){stripeColor=nextStripe;invalidate();}
+            if(track!=null&&track.optBoolean("silenced")){int gray=(Color.red(color)+Color.green(color)+Color.blue(color))/3;color=Color.rgb(gray,gray,gray);}
+            boolean emphasized=track!=null&&track.optBoolean("emphasized");
+            int background=stripe?(emphasized?blend(surface,Color.WHITE,.16f):surface):blend(0xff1d1d1d,color,emphasized?.65f:.50f);
+            setBackgroundColor(id==null?background:0xff1d1d1d);strip.setBackgroundColor(background);iconView.setBackgroundColor(background);if(groupGuide!=null)groupGuide.update(RemoteModel.array(state,"tracks"),id);
+            title.setText(id==null?"Master":String.format(Locale.US,"%02d  %s",index,track.optString("name")));iconView.update(id==null?"":track.optString("instrumentIcon",""));title.setTextColor(stripe?Color.WHITE:rgb(id==null?state.optLong("masterNameColor",0xffffff):track.optLong("nameColor",0xffffff)));
             double gain=id==null?state.optDouble("masterVolume",1):track.optDouble("volume",1);volume.update(gain);volumeReadout.setText(volume.value<=0?"−∞":String.format(Locale.US,"%+.1f",20*Math.log10(volume.value)));if(pan!=null){pan.update(id==null?state.optDouble("masterPan",0):track.optDouble("pan"));pan.setEnabled(id!=null||state.has("masterPan"));}
             mute.trackStyle(0xffff3b30,id==null?state.optBoolean("masterMute"):track.optBoolean("mute"));solo.trackStyle(YELLOW,id==null?state.optBoolean("masterSolo"):track.optBoolean("solo"));if(mono!=null){mono.setText(state.optBoolean("masterMono")?"Mono":"Estéreo");mono.style(GREEN,state.optBoolean("masterMono"));}
 

@@ -48,7 +48,7 @@ private struct GridSelectionFixture: View {
 }
 private struct HozSelectionFixture: View {
     let show: ShowController
-    @ObservedObject var updates: ShowProjectPresentation
+    @ObservedObject var updates: ShowTrackSelectionPresentation
     var body: some View {
         SelectionProbe(selection: show.mixerTrackSelection, anchor: show.selectedTrackForActions,
             select: { show.setMixerTrackSelection([$0], anchor: $0) })
@@ -92,12 +92,21 @@ Task { @MainActor in
         executor.project.songs[0].tracks = [source]
         let show = try ShowController(executor: executor, persistence: MemoryProjectStore(), initialProject: executor.project)
         let immediateTimeline = ShowTimelinePresentationObserver(show: show)
+        let nativeGeometry = ShowTimelinePresentationObserver(show: show,
+            nativeTransportOverlay: true, nativeTrackSelection: true)
+        var geometryPublications = 0
+        var controllerPublications = 0
+        var projectPublications = 0
+        let geometryUpdates = nativeGeometry.objectWillChange.sink { geometryPublications += 1 }
+        let controllerUpdates = show.objectWillChange.sink { controllerPublications += 1 }
+        let projectUpdates = show.projectPresentation.objectWillChange.sink { projectPublications += 1 }
+        defer { geometryUpdates.cancel(); controllerUpdates.cancel(); projectUpdates.cancel() }
         let window = NSPanel(contentRect: CGRect(x: -10000, y: -10000, width: 300, height: 300),
                              styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         let host = NSHostingView(rootView: VStack {
             GridSelectionFixture(show: show)
-            HozSelectionFixture(show: show, updates: show.projectPresentation)
+            HozSelectionFixture(show: show, updates: show.trackSelectionPresentation)
         })
         if #available(macOS 13, *) { host.sizingOptions = [] }
         window.contentView = host; window.orderBack(nil)
@@ -108,10 +117,17 @@ Task { @MainActor in
         try await flush()
         let views = selectionViews(host)
         precondition(views.count == 2)
+        let controllerBeforeSelection = controllerPublications
+        let projectBeforeSelection = projectPublications
         views[0].select(source.id)
+        show.revealSelectedMixerTrack(source.id)
         precondition(immediateTimeline.state.trackSelection == [source.id],
                      "Track Mixer must publish the committed click in the same display pass as Hoz-Mixer")
         try await flush()
+        precondition(geometryPublications == 0,
+                     "Native track selection must not publish a timeline geometry rebuild")
+        precondition(controllerPublications == controllerBeforeSelection && projectPublications == projectBeforeSelection,
+                     "Selection and reveal must not invalidate project or transport observers")
         precondition(show.copyTracks([source.id]))
         var newest = source.id
         for index in 0..<200 {

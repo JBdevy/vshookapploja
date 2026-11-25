@@ -39,10 +39,6 @@ import AppKit
     static var closes = 0
     func close(preserveState: Bool = false) { Self.closes += 1 }
 }
-@MainActor final class RightClickRouter {
-    static let shared = RightClickRouter()
-    var interactionBlocked = true
-}
 @MainActor enum SidebarWidthLimits { static let trackMixer = 280.0, setlist = 300.0 }
 @MainActor enum PanelInvocation { static var count = 0 }
 @MainActor struct WorkspaceFixture: View {
@@ -104,8 +100,6 @@ import AppKit
               "Replacement workspace \(iteration) must retain all panel actions after the previous workspace disappears")
         check(FXWindows.shared.closes == 0,
               "Previous workspace must not close editors owned by the new session")
-        check(RightClickRouter.shared.interactionBlocked,
-              "Previous workspace must not change the new session's interaction gate")
     }
     check(DetachedMixerFixture.closes == 11, "Every outgoing workspace must still close its own detached mixer")
     check(DetachedSetlistFixture.closes == 11, "Every outgoing workspace must close its own detached Setlist")

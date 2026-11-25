@@ -17,26 +17,12 @@ struct InterfaceScaleLayout<Content: View>: View {
     }
 }
 
-private struct InterfaceScaleModifier: ViewModifier {
-    @AppStorage(InterfaceScale.key) private var value = 1.0
-    func body(content: Content) -> some View {
-        InterfaceScaleLayout(factor: CGFloat(InterfaceScale.factor(value)), content: content)
-    }
-}
-private struct InterfaceScaleFixedModifier: ViewModifier {
-    let width: CGFloat, height: CGFloat
-    @AppStorage(InterfaceScale.key) private var value = 1.0
-    func body(content: Content) -> some View {
-        let factor = CGFloat(InterfaceScale.factor(value))
-        content.frame(width: width, height: height)
-            .scaleEffect(factor, anchor: .center)
-            .frame(width: width * factor, height: height * factor)
-    }
-}
 extension View {
-    func interfaceScaled() -> some View { modifier(InterfaceScaleModifier()) }
+    // Desktop layout uses the system scale. A geometry reader and an identity
+    // transform here would re-propose the entire workspace on a panel resize.
+    func interfaceScaled() -> some View { frame(maxWidth: .infinity, maxHeight: .infinity) }
     func interfaceScaledFrame(width: CGFloat, height: CGFloat) -> some View {
-        modifier(InterfaceScaleFixedModifier(width: width, height: height))
+        frame(width: width, height: height)
     }
 }
 
@@ -45,16 +31,8 @@ extension View {
 @MainActor final class InterfaceScaling {
     static let shared = InterfaceScaling()
     private let windows = NSMapTable<NSWindow, ScaledWindow>(keyOptions: .weakMemory, valueOptions: .strongMemory)
-    private var observation: NSObjectProtocol?
     private let defaults: UserDefaults
-    init(defaults: UserDefaults = .standard) {
-        self.defaults = defaults
-        observation = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification,
-            object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.refresh() }
-            }
-    }
-    deinit { if let observation { NotificationCenter.default.removeObserver(observation) } }
+    init(defaults: UserDefaults = .standard) { self.defaults = defaults }
     var factor: CGFloat { CGFloat(InterfaceScale.factor(defaults.object(forKey: InterfaceScale.key) as? Double ?? 1)) }
     func register(_ window: NSWindow, preserveFrame: Bool = false) {
         if let existing = windows.object(forKey: window) { existing.apply(factor); return }
@@ -97,12 +75,14 @@ struct InterfaceScaleAnchor: NSViewRepresentable {
     func updateNSView(_ view: Anchor, context: Context) { view.preserveFrame = preserveFrame; view.attach() }
     final class Anchor: NSView {
         var preserveFrame = false
+        private weak var registeredWindow: NSWindow?
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
         override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); attach() }
         func attach() {
-            guard let window else { return }
+            guard let window, registeredWindow !== window else { return }
+            registeredWindow = window
             DispatchQueue.main.async { [weak window, weak self] in
-                guard let self, let window else { return }
+                guard let self, let window, self.window === window else { return }
                 InterfaceScaling.shared.register(window, preserveFrame: self.preserveFrame)
             }
         }

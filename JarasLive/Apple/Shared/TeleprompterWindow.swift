@@ -1,8 +1,10 @@
 import SwiftUI
 #if os(macOS)
 import AppKit
+private typealias TPPlatformFont = NSFont
 #else
 import UIKit
+private typealias TPPlatformFont = UIFont
 #endif
 
 // One native layout for Mac and iPad: settings and geometry follow the same formulas.
@@ -27,7 +29,19 @@ struct TeleprompterProjectionLayout<Media: View>: View {
                         GeometryReader { area in
                             ZStack {
                                 Color.clear
-                                if preview { previewGrid(size: area.size) }
+                                if preview && settings.showsLyricsWithPreview {
+                                    let landscape = geometry.size.width >= geometry.size.height
+                                    let panel = CGSize(
+                                        width: landscape ? max(1, (area.size.width - 8) / 2) : area.size.width,
+                                        height: landscape ? area.size.height : max(1, (area.size.height - 8) / 2))
+                                    let lyrics = lyricColumns(size: panel, landscape: false, date: context.date)
+                                        .frame(width: panel.width, height: panel.height).clipped()
+                                    if landscape {
+                                        HStack(spacing: 8) { lyrics; previewGrid(size: panel) }
+                                    } else {
+                                        VStack(spacing: 8) { lyrics; previewGrid(size: panel) }
+                                    }
+                                } else if preview { previewGrid(size: area.size) }
                                 else if !content.text.isEmpty { lyricColumns(size: area.size, landscape: geometry.size.width >= geometry.size.height, date: context.date) }
                             }.clipped()
                         }
@@ -174,42 +188,57 @@ struct TeleprompterProjectionLayout<Media: View>: View {
         let rowCount = max(1, (blocks.count + columns - 1) / columns)
         let width = max(1, (size.width - 12 - CGFloat(columns - 1) * 8) / CGFloat(columns))
         let layout = tpPreviewLayout(blocks: blocks.map { (previewHeading($0), previewTitles($0)) },
-            family: settings.previewFontFamily, columns: columns, width: max(1, width - 18),
+            settings: settings, columns: columns, width: max(1, width - 18),
             height: max(1, size.height - 12 - CGFloat(rowCount - 1) * 8))
-        let font = layout.font * settings.previewScale / 100
         // Explicit cells prevent old geometry surviving a preview/page change.
         return VStack(alignment: .leading, spacing: 8) {
             ForEach(0..<rowCount, id: \.self) { row in
                 HStack(alignment: .top, spacing: 8) {
                     ForEach(Array(blocks.dropFirst(row * columns).prefix(columns))) { block in
-                        previewBlock(block, width: width, height: layout.heights[row], font: font)
+                        previewBlock(block, width: width, height: layout.heights[row], font: layout.font)
                     }
                 }
             }
         }.padding(6).frame(width: max(1, size.width), height: max(1, size.height), alignment: .topLeading)
             .clipped().transaction { $0.animation = nil }
     }
-    private func previewHeading(_ block: DAWRemoteTeleprompter.Block) -> String {
-        block.name.isEmpty ? "" : settings.display(block.name) +
-            (settings.previewBlockDurationEnabled ? " • " + tpTime(Int(ceil(block.rows.reduce(0, { $0 + $1.duration })))) : "")
+    private func previewHeading(_ block: DAWRemoteTeleprompter.Block) -> TPPreviewLine {
+        let duration = block.rows.reduce(0) { $0 + $1.duration }
+        return TPPreviewLine(name: settings.display(block.name),
+            time: settings.previewBlockDurationEnabled && duration > 0 ? tpTime(Int(ceil(duration))) : "")
     }
-    private func previewTitles(_ block: DAWRemoteTeleprompter.Block) -> [String] {
-        block.rows.map { settings.display($0.name) + (settings.previewSongDurationEnabled ? " • " + tpTime(Int(ceil($0.duration))) : "") }
+    private func previewTitles(_ block: DAWRemoteTeleprompter.Block) -> [TPPreviewLine] {
+        block.rows.map { song in
+            TPPreviewLine(name: settings.display(song.name),
+                time: settings.previewSongDurationEnabled && song.duration > 0 ? tpTime(Int(ceil(song.duration))) : "")
+        }
+    }
+    private func previewLine(_ line: TPPreviewLine, font: CGFloat, block: Bool, played: Bool = false) -> some View {
+        let nameScale = block ? settings.previewBlockNameScale : settings.previewScale
+        let timeScale = block ? settings.previewBlockTimeScale : settings.previewRegionTimeScale
+        return HStack(alignment: .firstTextBaseline, spacing: 5) {
+            Text(verbatim: line.name).font(tpFont(settings.previewFontFamily, size: max(1, font * nameScale / 100)))
+                .underline(!block && settings.previewUnderlineEnabled).strikethrough(played)
+                .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+            if !line.time.isEmpty {
+                Text(verbatim: line.time).font(tpFont(settings.previewFontFamily, size: max(1, font * timeScale / 100)))
+                    .strikethrough(played)
+                    .monospacedDigit().lineLimit(1).fixedSize()
+            }
+        }
     }
     private func previewBlock(_ block: DAWRemoteTeleprompter.Block, width: CGFloat, height: CGFloat, font: CGFloat) -> some View {
         let heading = previewHeading(block)
         let titles = previewTitles(block)
         return VStack(alignment: .leading, spacing: 4) {
-            if !heading.isEmpty {
-                Text(heading).font(tpFont(settings.previewFontFamily, size: font))
-                    .foregroundStyle(Color(hex: block.nameColor ?? 0x69ed91)).lineLimit(2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            if !heading.name.isEmpty {
+                previewLine(heading, font: font, block: true)
+                    .foregroundStyle(Color(hex: block.nameColor ?? 0x69ed91))
                 Rectangle().fill(Color(hex: block.color).opacity(0.85)).frame(height: 2).padding(.vertical, 2)
             }
             ForEach(Array(block.rows.enumerated()), id: \.element.id) { index, song in
-                Text(titles[index]).font(tpFont(settings.previewFontFamily, size: font))
-                    .underline(settings.previewUnderlineEnabled).strikethrough(song.liveExecuted == true)
-                    .foregroundStyle(Color(hex: song.previewTextColor)).lineLimit(2)
+                previewLine(titles[index], font: font, block: false, played: song.liveExecuted == true)
+                    .foregroundStyle(Color(hex: song.previewTextColor))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 3).padding(.bottom, 4)
                     .background(song.hasPlaybackHighlight ? Color(hex: song.playing == true ? 0x701818 : 0x665000) : .clear)
@@ -261,39 +290,55 @@ struct TeleprompterNoticeStage<Content: View, Notice: View>: View {
 }
 
 private let tpFontNames = ["arial":["Arial-BoldMT"],"segoe":["SegoeUI-Bold","HelveticaNeue-Bold"],"bahnschrift":["Bahnschrift","DINAlternate-Bold"],"verdana":["Verdana-Bold"],"tahoma":["Tahoma-Bold"],"georgia":["Georgia-Bold"],"trebuchet":["TrebuchetMS-Bold"],"impact":["Impact"],"mono":["CourierNewPS-BoldMT"]]
+private struct TPPreviewLine {
+    let name: String
+    let time: String
+}
 private final class TPPreviewLayout: NSObject {
     let font: CGFloat
     let heights: [CGFloat]
     init(font: CGFloat, heights: [CGFloat]) { self.font = font; self.heights = heights }
 }
 private let tpPreviewLayoutCache: NSCache<NSString, TPPreviewLayout> = { let cache = NSCache<NSString, TPPreviewLayout>(); cache.countLimit = 256; return cache }()
-private func tpPreviewLayout(blocks: [(String, [String])], family: String, columns: Int, width: CGFloat, height: CGFloat) -> TPPreviewLayout {
+private func tpPreviewLayout(blocks: [(TPPreviewLine, [TPPreviewLine])], settings: TeleprompterSettings, columns: Int, width: CGFloat, height: CGFloat) -> TPPreviewLayout {
+    let family = settings.previewFontFamily
+    let scales = [settings.previewScale, settings.previewRegionTimeScale, settings.previewBlockNameScale, settings.previewBlockTimeScale]
     var cacheParts: [String] = [family, String(columns), String(Double(width)), String(Double(height))]
-    for block in blocks { cacheParts.append(block.0); cacheParts.append(contentsOf: block.1); cacheParts.append("\u{1e}") }
+    cacheParts.append(contentsOf: scales.map { String($0) })
+    for (heading, songs) in blocks {
+        for line in [heading] + songs { cacheParts.append(contentsOf: [line.name, line.time]) }
+        cacheParts.append("\u{1e}")
+    }
     let key = cacheParts.joined(separator: "\u{1f}") as NSString
     if let cached = tpPreviewLayoutCache.object(forKey: key) { return cached }
     let rows = max(1, (blocks.count + columns - 1) / columns)
-    func rowHeights(_ size: CGFloat) -> [CGFloat] {
+    func nativeFont(_ size: CGFloat) -> TPPlatformFont {
         #if os(macOS)
-        let native = tpFontNames[family]?.compactMap { NSFont(name: $0, size: size) }.first ?? NSFont.systemFont(ofSize: size, weight: .bold)
+        return tpFontNames[family]?.compactMap { NSFont(name: $0, size: size) }.first ?? NSFont.systemFont(ofSize: size, weight: .bold)
         #else
-        let native = tpFontNames[family]?.compactMap { UIFont(name: $0, size: size) }.first ?? UIFont.boldSystemFont(ofSize: size)
+        return tpFontNames[family]?.compactMap { UIFont(name: $0, size: size) }.first ?? UIFont.boldSystemFont(ofSize: size)
         #endif
-        func textHeight(_ text: String) -> CGFloat {
-            let rect = (text as NSString).boundingRect(with: CGSize(width: width, height: .greatestFiniteMagnitude),
-                options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: native], context: nil)
-            return ceil(min(rect.height, size * 2.4)) + 2
+    }
+    func rowHeights(_ size: CGFloat, scaled: Bool = false) -> [CGFloat] {
+        let sizes = scales.map { max(1, scaled ? size * CGFloat($0 / 100) : size) }
+        let fonts = sizes.map(nativeFont)
+        func textHeight(_ line: TPPreviewLine, index: Int) -> CGFloat {
+            let time = (line.time as NSString).size(withAttributes: [.font: fonts[index + 1]])
+            let nameWidth = max(1, width - (line.time.isEmpty ? 0 : time.width + 5))
+            let rect = (line.name as NSString).boundingRect(with: CGSize(width: nameWidth, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: fonts[index]], context: nil)
+            return ceil(max(min(rect.height, sizes[index] * 2.4), line.time.isEmpty ? 0 : time.height)) + 2
         }
         var heights = Array(repeating: CGFloat(16), count: rows)
         for (index, block) in blocks.enumerated() {
-            let required = (block.0.isEmpty ? 0 : textHeight(block.0) + 14) + block.1.reduce(0) { $0 + textHeight($1) + 8 } + 16
+            let required = (block.0.name.isEmpty ? 0 : textHeight(block.0, index: 2) + 14) + block.1.reduce(0) { $0 + textHeight($1, index: 0) + 8 } + 16
             heights[index / columns] = max(heights[index / columns], required)
         }
         return heights
     }
     var low: CGFloat = 1, high: CGFloat = 96
     for _ in 0..<12 { let mid = (low + high) / 2; if rowHeights(mid).reduce(0, +) <= height { low = mid } else { high = mid } }
-    let font = max(1, floor(low * 2) / 2), needed = rowHeights(font)
+    let font = max(1, floor(low * 2) / 2), needed = rowHeights(font, scaled: true)
     // Give a dense row more space while preserving the 2 × 2 order and shared font.
     let total = max(1, needed.reduce(0, +))
     let result = TPPreviewLayout(font: font, heights: needed.map { max(1, height * $0 / total) })
@@ -344,6 +389,7 @@ private struct TPPreviewSong: Identifiable, Equatable, Codable {
     let name: String
     let duration: Double
     let color: UInt32
+    let unified: Bool
     var liveExecuted = false
 }
 private struct TPPreviewBlock: Identifiable, Equatable, Codable {
@@ -360,12 +406,17 @@ private struct TPProjectionData: Equatable {
     var loopActive = false
     var previewPlayback = TeleprompterPreviewPlayback()
     var preview: [TPPreviewBlock] = []
+    var previewPlaylist = false
+    @MainActor func previewColor(_ entry: TPPreviewSong, settings: TeleprompterSettings) -> UInt32 {
+        let regionColor = entry.id == currentRegion ? settings.highlightColor : entry.id == queuedRegion ? settings.queueNameColor : entry.color
+        return settings.previewNameColor(region: regionColor, setlist: teleprompterSetlistColor(playlist: previewPlaylist, unified: entry.unified))
+    }
 }
 @MainActor private final class TPProjectionDisplay: ObservableObject {
     @Published var data = TPProjectionData()
     @Published var fullscreen = false
     @Published var previewActive = false
-    @Published var previewPage = 0
+    @Published var previewBlocks = 0..<4
 }
 private struct LocalizedTeleprompterConfig: View {
     let initialSlot: Int
@@ -391,7 +442,8 @@ private struct LocalizedTeleprompterConfig: View {
     let index: Int
     @Published private(set) var visible = false
     @Published private(set) var previewActive = false
-    @Published private(set) var previewPage = 0
+    @Published private(set) var previewSlots = TeleprompterPreviewSlots.load()
+    var previewPage: Int { previewSlots.selected }
     private var window: ProjectionWindow?
     private var remoteConfiguration: NSPanel?
     private var configuration: NSPanel?
@@ -410,6 +462,7 @@ private struct LocalizedTeleprompterConfig: View {
         self.index = index
         preferences = index == 1 ? .shared : .second
         super.init()
+        display.previewBlocks = previewSlots.visibleBlocks
         preferenceObservation = preferences.$settings.dropFirst().sink { [weak self] _ in
             guard self?.visible == true || (self.map { TeleprompterRemote.panel($0.index).enabled } ?? false) else { return }
             // Published sends before the stored profile changes. Read it on the
@@ -433,11 +486,15 @@ private struct LocalizedTeleprompterConfig: View {
         window.contentView = host
         self.window = window; visible = true; display.fullscreen = false
         if index == 2 { previewActive = Self.shared.previewActive; display.previewActive = previewActive }
-        video.setProjectionEnabled(!preferences.settings.displaysPreview(previewActive))
         cachedRevision = nil
-        update(show.snapshot,revision: show.projectRevision)
-        window.restorePlacement(key: "jaras.teleprompterWindow.\(index)"); ProjectionWindow.presentWorkspaceWindow(window)
+        window.restorePlacement(key: "jaras.teleprompterWindow.\(index)")
+        ProjectionWindow.presentWorkspaceWindow(window, activates: false)
         display.fullscreen = window.isProjectionFullscreen
+        DispatchQueue.main.async { [weak self, weak window] in
+            guard let self, let window, self.window === window, let show = self.show else { return }
+            self.video.setProjectionEnabled(!self.preferences.settings.displaysPreview(self.previewActive))
+            self.update(show.snapshot, revision: show.projectRevision)
+        }
     }
     func togglePreview() {
         setPreview(!previewActive)
@@ -449,9 +506,25 @@ private struct LocalizedTeleprompterConfig: View {
         video.setProjectionEnabled(visible && !preferences.settings.displaysPreview(active))
     }
     func selectPreviewPage(_ page: Int) {
-        previewPage = min(5,max(0,page))
-        display.previewPage = previewPage
-        if index == 1 { Self.second.previewPage = previewPage; Self.second.display.previewPage = previewPage }
+        var slots = previewSlots
+        slots.selected = min(TeleprompterPreviewSlots.slotCount - 1, max(0, page))
+        setPreviewSlots(slots)
+    }
+    func advancePreviewSlot(_ slot: Int) {
+        var slots = previewSlots
+        slots.advance(slot)
+        setPreviewSlots(slots)
+    }
+    private func setPreviewSlots(_ slots: TeleprompterPreviewSlots) {
+        slots.save()
+        for controller in [Self.shared, Self.second] {
+            controller.previewSlots = slots
+            controller.display.previewBlocks = slots.visibleBlocks
+            if let show = controller.show {
+                controller.lastRemoteRefresh = 0
+                controller.update(show.snapshot, revision: show.projectRevision)
+            }
+        }
     }
     /// Setlist edits invalidate only the cached preview, without rescheduling audio.
     func invalidatePreview() { cachedRevision = nil }
@@ -508,14 +581,16 @@ private struct LocalizedTeleprompterConfig: View {
             next.progress = (min(1,max(0,(position - clip.startTime) / clip.duration)) * 1000).rounded() / 1000
         }
         next.preview = cachedPreview
+        next.previewPlaylist = snapshot.project.regionSetlist?.playlists.contains { $0.id == snapshot.project.regionSetlist?.selectedId && $0.songId == song.id } == true
         next.previewPlayback = TeleprompterPreviewPlayback(song: song, transport: transport,
             playlist: snapshot.project.regionSetlist?.playlists.first { $0.id == snapshot.project.regionSetlist?.selectedId && $0.songId == song.id })
         if visible, display.data != next { display.data = next }
         if let window, display.fullscreen != window.isProjectionFullscreen { display.fullscreen = window.isProjectionFullscreen }
         if TeleprompterRemote.panel(index).enabled {
-            let blocks = Array(next.preview.dropFirst(previewPage * 4).prefix(4)).map { block in
+            let range = previewSlots.visibleBlocks
+            let blocks = next.preview.dropFirst(range.lowerBound).prefix(range.count).map { block in
                 TeleprompterRemoteBlock(name: block.name, color: block.color, duration: block.duration, songs: block.songs.map {
-                    TeleprompterRemoteSong(name: $0.name, color: $0.id == next.currentRegion ? preferences.settings.highlightColor : $0.id == next.queuedRegion ? preferences.settings.queueNameColor : $0.color, duration: $0.duration, liveExecuted: $0.liveExecuted,
+                    TeleprompterRemoteSong(name: $0.name, color: next.previewColor($0, settings: preferences.settings), duration: $0.duration, liveExecuted: $0.liveExecuted,
                         playing: next.previewPlayback.playingEntry == $0.id, queued: next.previewPlayback.queuedEntry == $0.id,
                         playbackProgress: next.previewPlayback.progress(for: $0.id))
                 }, nameColor: UInt32(AppearanceColor.shared("jaras.setlist.blockTextColor", default: 0x69ed91).value))
@@ -537,7 +612,7 @@ private struct LocalizedTeleprompterConfig: View {
             }
             let last = result.count - 1
             result[last].duration += region.endTime - region.startTime
-            result[last].songs.append(TPPreviewSong(id: entry.id,name: region.displayName,duration: region.endTime-region.startTime,color: region.color ?? result[last].color,
+            result[last].songs.append(TPPreviewSong(id: entry.id,name: region.displayName,duration: region.endTime-region.startTime,color: region.color ?? result[last].color, unified: region.parentRegionID != nil,
                 liveExecuted: played.contains(region.id)))
         }
         result += (blocks[nil] ?? []).map { TPPreviewBlock(id: $0.id.uuidString,name: $0.name,color: $0.color) }
@@ -590,12 +665,20 @@ private struct LocalizedTeleprompterConfig: View {
     func windowWillClose(_ notification: Notification) {
         guard let closed = notification.object as? NSWindow else { return }
         if closed === window {
-            visible = false; window?.contentView = nil; window = nil
-            video.setProjectionEnabled(false)
+            visible = false; window = nil
             cachedPreview = []; cachedRevision = nil
             if !TeleprompterRemote.panel(index).enabled { show = nil }
-        } else if closed === configuration { configuration?.contentView = nil; configuration = nil }
-        else if closed === remoteConfiguration { remoteConfiguration?.contentView = nil; remoteConfiguration = nil }
+            DispatchQueue.main.async { [weak self] in
+                closed.contentView = nil
+                if let self, self.window == nil { self.video.setProjectionEnabled(false) }
+            }
+        } else if closed === configuration {
+            configuration = nil
+            DispatchQueue.main.async { closed.contentView = nil }
+        } else if closed === remoteConfiguration {
+            remoteConfiguration = nil
+            DispatchQueue.main.async { closed.contentView = nil }
+        }
     }
 }
 
@@ -626,20 +709,14 @@ struct TeleprompterPreviewButton: View {
     @State private var choosingPage = false
     var body: some View {
         Button { controller.togglePreview() } label: {
-            DesktopToolbarLabel(title: "Preview", systemImage: "preview", tone: controller.previewActive ? .live : .neutral)
+            Text(verbatim: "PRW")
+                .foregroundStyle(controller.previewActive ? JarasTheme.green : JarasTheme.liveOffRed)
+                .modifier(DesktopToolbarChrome(tone: controller.previewActive ? .live : .neutral))
+                .accessibilityLabel("Preview")
         }.buttonStyle(.plain)
             .overlay(TeleprompterRightClick(action: { choosingPage = true }))
             .help(Text("Preview"))
-            .popover(isPresented: $choosingPage) {
-                VStack(alignment: .leading,spacing: 12) {
-                    Text("Preview").font(.jarasHeadline)
-                    Picker("Blocks",selection: Binding(get: { controller.previewPage },set: { controller.selectPreviewPage($0) })) {
-                        ForEach(0..<6) { page in
-                            Text("Blocks \(page * 4 + 1)–\(page * 4 + 4)").tag(page)
-                        }
-                    }.pickerStyle(.segmented).labelsHidden()
-                }.padding(16).frame(width: 660)
-            }
+            .popover(isPresented: $choosingPage) { TeleprompterPreviewSlotMenu(controller: controller) }
     }
 }
 private struct TeleprompterRightClick: NSViewRepresentable {
@@ -651,6 +728,9 @@ private final class TeleprompterRightClickView: RightClickTargetView { override 
 
 private struct TeleprompterProjectionView: View {
     @ObservedObject private var blockTextColor = AppearanceColor.shared("jaras.setlist.blockTextColor", default: 0x69ed91)
+    @ObservedObject private var allRegionsTextColor = AppearanceColor.shared("jaras.setlist.allRegionsTextColor", default: 0xffffff)
+    @ObservedObject private var playlistTextColor = AppearanceColor.shared("jaras.setlist.playlistTextColor", default: 0x00ff9a)
+    @ObservedObject private var unifiedTextColor = AppearanceColor.shared("jaras.setlist.unifiedTextColor", default: 0xffeb3b)
     let index: Int
     @ObservedObject var display: TPProjectionDisplay
     @ObservedObject var preferences: TeleprompterPreferences
@@ -660,9 +740,10 @@ private struct TeleprompterProjectionView: View {
     @AppStorage("jaras.language") private var language = "en"
     private var content: DAWRemoteTeleprompter {
         let data = display.data, settings = preferences.settings
-        let blocks = Array(data.preview.dropFirst(display.previewPage * 4).prefix(4)).map { block in
+        let range = display.previewBlocks
+        let blocks = data.preview.dropFirst(range.lowerBound).prefix(range.count).map { block in
             DAWRemoteTeleprompter.Block(id: UUID(uuidString: block.id)!, name: block.name, color: block.color, rows: block.songs.map { song in
-                .init(id: song.id, name: song.name, color: song.id == data.currentRegion ? settings.highlightColor : song.id == data.queuedRegion ? settings.queueNameColor : song.color, duration: song.duration, liveExecuted: song.liveExecuted,
+                .init(id: song.id, name: song.name, color: data.previewColor(song, settings: settings), duration: song.duration, liveExecuted: song.liveExecuted,
                     playing: data.previewPlayback.playingEntry == song.id, queued: data.previewPlayback.queuedEntry == song.id,
                     playbackProgress: data.previewPlayback.progress(for: song.id))
             }, nameColor: UInt32(blockTextColor.value))
@@ -685,9 +766,17 @@ private struct TeleprompterProjectionView: View {
 @MainActor final class TeleprompterWindow: ObservableObject {
     static let shared = TeleprompterWindow()
     @Published var previewActive = false
-    @Published var previewPage = 0
+    @Published private(set) var previewSlots = TeleprompterPreviewSlots.load()
+    var previewPage: Int { previewSlots.selected }
     func togglePreview() { previewActive.toggle() }
-    func selectPreviewPage(_ page: Int) { previewPage = min(5, max(0, page)) }
+    func selectPreviewPage(_ page: Int) {
+        previewSlots.selected = min(TeleprompterPreviewSlots.slotCount - 1, max(0, page))
+        previewSlots.save()
+    }
+    func advancePreviewSlot(_ slot: Int) {
+        previewSlots.advance(slot)
+        previewSlots.save()
+    }
     func invalidatePreview() {}
     func update(_ snapshot: ShowSnapshot,revision: UInt64 = 0) {
         TeleprompterTimerController.shared.observePlayback(snapshot)
@@ -696,6 +785,35 @@ private struct TeleprompterProjectionView: View {
 }
 #endif
 
+struct TeleprompterPreviewSlotMenu: View {
+    @ObservedObject var controller: TeleprompterWindow
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Preview").font(.jarasHeadline)
+            HStack(spacing: 4) {
+                ForEach(0..<TeleprompterPreviewSlots.slotCount, id: \.self) { slot in
+                    let selected = controller.previewPage == slot
+                    let button = Button { controller.selectPreviewPage(slot) } label: {
+                        Text(verbatim: controller.previewSlots.label(slot))
+                            .frame(maxWidth: .infinity).frame(height: 28)
+                            .background(selected ? JarasTheme.display : Color.clear, in: RoundedRectangle(cornerRadius: 5))
+                            .contentShape(Rectangle())
+                    }
+                    #if os(macOS)
+                    button.buttonStyle(.plain)
+                        .overlay(TeleprompterRightClick(action: { controller.advancePreviewSlot(slot) }))
+                        .accessibilityAddTraits(selected ? .isSelected : [])
+                    #else
+                    button.buttonStyle(IpadTapHoldButtonStyle(hold: { controller.advancePreviewSlot(slot) }))
+                        .accessibilityAddTraits(selected ? .isSelected : [])
+                    #endif
+                }
+            }.padding(2).background(JarasTheme.panel, in: RoundedRectangle(cornerRadius: 6))
+        }.padding(16).frame(width: 430)
+    }
+}
+
 #if os(macOS)
 struct TPNoticeAppearance: Codable {
     var window1 = true, window2 = true, emojiEnabled = false, cleanDisplay = true
@@ -703,6 +821,10 @@ struct TPNoticeAppearance: Codable {
     var scale = 100.0
     var text: UInt32 = 0xffffff, background: UInt32 = 0x000000, flash: UInt32 = 0xffdc52
 }
+@MainActor final class TPNoticeEditorPresentation: ObservableObject {
+    @Published fileprivate(set) var isOpen = false
+}
+
 @MainActor final class TPNoticeController: NSObject, ObservableObject, NSWindowDelegate {
     static let shared = TPNoticeController()
     @Published var appearance: TPNoticeAppearance { didSet { persist() } }
@@ -749,7 +871,7 @@ struct TPNoticeAppearance: Codable {
     private var pausedRemaining = 20.0
     private var expiry: Task<Void, Never>?
     private var panel: NSWindow?
-    @Published private(set) var editorOpen = false
+    let editorPresentation = TPNoticeEditorPresentation()
     private var globalDraft = ""
     private let defaults: UserDefaults
     init(defaults: UserDefaults = .standard) {
@@ -811,8 +933,15 @@ struct TPNoticeAppearance: Codable {
     }
     func clear() {
         let restore = active && !stoppedNoticeActive && pinWhenStopped && !playbackRunning
-        stoppedNoticeActive = false; expiry?.cancel(); expiry = nil; flashTask?.cancel(); flashing = false
-        message = ""; image = nil; remoteImage = nil; deadline = nil; pinned = false
+        stoppedNoticeActive = false
+        expiry?.cancel(); expiry = nil
+        flashTask?.cancel(); flashTask = nil
+        if flashing { flashing = false }
+        if !message.isEmpty { message = "" }
+        if image != nil { image = nil }
+        remoteImage = nil
+        if deadline != nil { deadline = nil }
+        if pinned { pinned = false }
         if restore { presentStoppedNotice() }
     }
     func chooseImage(for index: Int? = nil) {
@@ -830,8 +959,16 @@ struct TPNoticeAppearance: Codable {
         }
     }
     func open() {
-        if let panel { ProjectionWindow.presentWorkspaceWindow(panel); return }
-        let window = NSWindow(contentRect: NSRect(x: 0,y: 0,width: 700,height: 430),styleMask: [.titled,.closable],backing: .buffered,defer: false)
+        if let panel {
+            panel.title = JarasLocalization.string("Messages")
+            panel.contentView?.isHidden = false
+            ProjectionWindow.presentWorkspaceWindow(panel, activates: false)
+            if !editorPresentation.isOpen { editorPresentation.isOpen = true }
+            return
+        }
+        let window = NSPanel(contentRect: NSRect(x: 0,y: 0,width: 700,height: 430),styleMask: [.titled,.closable,.nonactivatingPanel],backing: .buffered,defer: false)
+        window.becomesKeyOnlyIfNeeded = true
+        ProjectionWindow.followWorkspaceWindow(window)
         window.title = JarasLocalization.string("Messages"); window.isReleasedWhenClosed = false
         window.delegate = self
         window.contentMinSize = NSSize(width: 660,height: 360)
@@ -839,14 +976,16 @@ struct TPNoticeAppearance: Codable {
         if #available(macOS 13, *) { host.sizingOptions = [] }
         window.contentView = host
         InterfaceScaling.shared.register(window)
-        window.center(); ProjectionWindow.presentWorkspaceWindow(window); panel = window
-        editorOpen = true
+        window.center(); ProjectionWindow.presentWorkspaceWindow(window, activates: false); panel = window
+        editorPresentation.isOpen = true
     }
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow, window === panel else { return }
         if !stoppedNoticeActive { clear() }
-        panel = nil
-        editorOpen = false
+        DispatchQueue.main.async { [weak window] in
+            if let window, !window.isVisible { window.contentView?.isHidden = true }
+        }
+        editorPresentation.isOpen = false
     }
 }
 // Keep SwiftUI's editor and its selection/focus intact; only make its native

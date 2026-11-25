@@ -2,6 +2,28 @@ import XCTest
 @testable import JarasApplication
 
 final class ItemFadeTests: XCTestCase {
+    func testFadeControlsAreExplicitAndSurviveZeroLengthAndSave() throws {
+        var clip = AudioClip(id: UUID(), name: "Audio", startTime: 0, duration: 0.08)
+        XCTAssertFalse(clip.showsFadeHandles)
+        clip.setFadeControlsEnabled(true)
+        XCTAssertEqual(clip.fadeIn, 0.02)
+        XCTAssertEqual(clip.fadeOut, 0.02)
+
+        clip.fadeIn = nil
+        clip.fadeOut = nil
+        var reopened = try JSONDecoder().decode(AudioClip.self, from: JSONEncoder().encode(clip))
+        XCTAssertTrue(reopened.showsFadeHandles)
+        reopened.setFadeControlsEnabled(true)
+        XCTAssertNil(reopened.fadeIn)
+        XCTAssertNil(reopened.fadeOut)
+        reopened.setFadeControlsEnabled(false)
+        XCTAssertFalse(reopened.showsFadeHandles)
+
+        // Older documents have fades but no explicit control state.
+        reopened.fadeOut = 0.01
+        XCTAssertTrue(reopened.showsFadeHandles)
+    }
+
     func testBothCurveControlsStayMonotoneAndBoundedWithExactEndpoints() {
         for c in stride(from: -1.0, through: 1.0, by: 0.2) {
             for s in stride(from: -1.0, through: 1.0, by: 0.2) {

@@ -10,6 +10,7 @@ enum JarasInterfaceTheme: String {
     var panelHex: UInt32 { 0x0f0f0f }
     var line: Color { .gray }
     var display: Color { .black }
+    var libraryEntriesBackground: Color { display }
 }
 enum JarasTheme { static let setlistQueuedYellow: UInt32 = 0x807219 }
 struct NativeLibraryTrackDrop {
@@ -17,15 +18,39 @@ struct NativeLibraryTrackDrop {
     func operation(for sender: NSDraggingInfo, in view: NSView) -> NSDragOperation { [] }
     func perform(_ sender: NSDraggingInfo, in view: NSView) -> Bool { false }
 }
-final class ShowController { var catalogBuilds = 0 }
+final class ShowController {
+    struct Snapshot {
+        struct Project { let id = UUID() }
+        let project = Project()
+    }
+    let snapshot = Snapshot()
+    var catalogBuilds = 0
+}
 struct WorkspaceLibrary: View {
     // Library width limits
     let theme: JarasInterfaceTheme
     let show: ShowController
+    var samplersOnly = false
+    var visibilityChanges: PassthroughSubject<Bool, Never>? = nil
     var body: some View {
         let _ = { show.catalogBuilds += 1 }()
         LibraryColumns(theme: theme, folders: StatefulControl(role: "folders", revision: 0),
                        entries: StatefulControl(role: "entries", revision: 0))
+    }
+}
+
+private final class LibraryPanePresentation: ObservableObject {
+    @Published var visible = true
+}
+
+private struct LibraryPaneFixture: View {
+    let show: ShowController
+    @ObservedObject var presentation: LibraryPanePresentation
+    var body: some View {
+        HStack(spacing: 0) {
+            DesktopLibraryPane(theme: .dark, show: show, available: 510, visible: presentation.visible)
+            Color.clear
+        }
     }
 }
 
@@ -35,10 +60,8 @@ MainActor.assumeIsolated {
     store.set(344.0, forKey: widthKey)
     store.set(146.0, forKey: WorkspaceLibrary.folderWidthKey)
     let show = ShowController()
-    let root = NSHostingView(rootView: HStack(spacing: 0) {
-        DesktopLibraryPane(theme: .dark, show: show, available: 510)
-        Color.clear
-    })
+    let presentation = LibraryPanePresentation()
+    let root = NSHostingView(rootView: LibraryPaneFixture(show: show, presentation: presentation))
     let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 900, height: 420), styleMask: [.titled], backing: .buffered, defer: false)
     window.isReleasedWhenClosed = false
     window.contentView = root
@@ -66,5 +89,18 @@ MainActor.assumeIsolated {
         precondition(window.firstResponder === entry, "the details editor must retain keyboard focus")
     }
     print("LIBRARY_BOTH_DIVIDERS_APPLY_FINAL_WIDTH_ONLY_PRESERVE_EDITOR_AND_CATALOG_OK")
+    let pane = descendants(RetainedWorkspacePaneView.self, in: root).first!
+    let width = pane.frame.width
+    let builds = show.catalogBuilds
+    presentation.visible = false
+    settle(root)
+    precondition(entry.isHiddenOrHasHiddenAncestor && pane.frame.width == 0)
+    precondition(window.firstResponder !== entry, "a closed library must release keyboard focus")
+    presentation.visible = true
+    settle(root)
+    precondition(!entry.isHiddenOrHasHiddenAncestor && pane.frame.width == width)
+    precondition(descendants(WorkspaceControl.self, in: root).contains { $0 === entry })
+    precondition(show.catalogBuilds == builds, "reopening the library must reuse its catalog view")
+    print("LIBRARY_REOPEN_RETAINS_CONTROLS_AND_RESTORES_WIDTH_OK")
     window.close()
 }

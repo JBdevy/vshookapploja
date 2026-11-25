@@ -32,6 +32,24 @@ import XCTest
     }
 }
 final class NativeFXTests: XCTestCase {
+
+    func testAudioUnitSlotAcceptsCanonicalComponentIdentity() throws {
+        let identity = "AU-61756678-64656C79-6170706C"
+        var plugin = ExternalPlugin(classID: identity, name: "Delay", path: "au://" + identity)
+        var settings = NativeFXSettings()
+        settings.externalPlugins = [plugin]
+        settings.inserted = [plugin.effectKey]
+
+        try settings.validate()
+        let reloaded = try JSONDecoder().decode(NativeFXSettings.self, from: JSONEncoder().encode(settings))
+        try reloaded.validate()
+        XCTAssertEqual(reloaded.externalPlugins?.first?.classID, identity)
+
+        plugin.classID = "AU-61756678-64656C79"
+        settings.externalPlugins = [plugin]
+        XCTAssertThrowsError(try settings.validate())
+    }
+
     func testCatSynthPresetSlotsSurviveProjectEncodingAndEffectBypass() throws {
         var settings = NativeFXSettings()
         let key = settings.appendNative("CatSynth", asInstance: true)

@@ -180,10 +180,9 @@ public extension AudioClip {
 public extension Song {
     func instrumentPlaybackNotes(in clip: AudioClip, track: Track?) -> [MIDIPlaybackNote] {
         let notes = midiPlaybackNotes(in: clip)
-        guard track?.fx?.arpeggiatesMIDI == true || (clip.fxBypassed != true && clip.fx?.arpeggiatesMIDI == true) else {
-            return notes
-        }
-        return MIDIArpeggiator.notes(notes) { tempoSection(at: $0).bpm }
+        let parameters = track?.fx?.midiArpeggio ?? (clip.fxBypassed == true ? nil : clip.fx?.midiArpeggio)
+        guard let parameters else { return notes }
+        return MIDIArpeggiator.notes(notes, parameters: parameters) { tempoSection(at: $0).bpm }
     }
 
     func midiPlaybackNotes(in clip: AudioClip) -> [MIDIPlaybackNote] {
@@ -208,29 +207,34 @@ public extension Song {
 }
 
 enum MIDIArpeggiator {
-    static let gate = 0.75
-    static func interval(bpm: Double) -> Double { 15 / max(20, bpm) }
-
-    static func notes(_ ordered: [MIDIPlaybackNote], bpm: (Double) -> Double) -> [MIDIPlaybackNote] {
+    static func notes(_ ordered: [MIDIPlaybackNote], parameters: NativeArpeggiatorSettings,
+                      bpm: (Double) -> Double) -> [MIDIPlaybackNote] {
         guard let first = ordered.first else { return [] }
         var pending = 0, position = first.start
         var active: [MIDIPlaybackNote] = [], result: [MIDIPlaybackNote] = []
-        var previousPitch = -1
+        var index = 0
         while pending < ordered.count || !active.isEmpty {
+            let pendingBefore = pending
             while pending < ordered.count && ordered[pending].start <= position + 1e-8 {
                 active.append(ordered[pending]); pending += 1
             }
+            let activeBefore = active.count
             active.removeAll { $0.end <= position + 1e-8 }
+            if pending != pendingBefore || active.count != activeBefore {
+                if parameters.direction != 3 { active.sort { ($0.pitch, $0.channel) < ($1.pitch, $1.channel) } }
+                index = 0
+            }
             guard !active.isEmpty else {
                 guard pending < ordered.count else { break }
-                position = ordered[pending].start; previousPitch = -1
+                position = ordered[pending].start
                 continue
             }
-            let ascending = active.min { $0.pitch < $1.pitch }!
-            var note = active.lazy.filter { $0.pitch > previousPitch }.min { $0.pitch < $1.pitch } ?? ascending
-            let step = interval(bpm: bpm(position))
-            previousPitch = note.pitch
-            note.start = position; note.end = min(note.end, position + step * gate)
+            let selected = parameters.step(index, count: active.count) { active[$0].pitch }
+            index += 1
+            var note = active[selected.note]
+            let step = parameters.interval(transportBPM: bpm(position))
+            note.pitch += selected.transpose
+            note.start = position; note.end = min(note.end, position + step * parameters.gateFraction)
             // A repeated pitch may derive from one sustained source note. Give
             // each trigger a stable scheduling identity for the MIDI bridge.
             var bytes = note.sourceID.uuid
@@ -290,6 +294,11 @@ public struct RecordingCycle: Sendable {
               range.upperBound-range.lowerBound >= 0.001 else { return nil }
         self.range = range
     }
+    public init?(loop: LoopState) {
+        guard loop.enabled, let start = loop.start, let end = loop.end,
+              start.isFinite, end.isFinite, end > start else { return nil }
+        self.init(start...end)
+    }
     public func pass(start: Double, elapsed: Double) -> (index: Int, position: Double) {
         let time = start + max(0, elapsed)
         guard time >= range.upperBound else { return (0, time) }
@@ -300,6 +309,15 @@ public struct RecordingCycle: Sendable {
         if index == 0 { return (start, 0, range.upperBound-start) }
         let length = range.upperBound-range.lowerBound
         return (range.lowerBound, range.upperBound-start+Double(index-1)*length, length)
+    }
+
+    public func transportDeviation(from previous: Double, to position: Double, advance: Double, wrapped: Bool) -> Double {
+        let expected = previous + max(0, advance)
+        let length = range.upperBound - range.lowerBound
+        guard wrapped, range.contains(position) else {
+            return abs(position - expected)
+        }
+        return abs((position - expected).remainder(dividingBy: length))
     }
 }
 

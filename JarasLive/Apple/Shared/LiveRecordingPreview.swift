@@ -11,6 +11,11 @@ struct RecordingPreviewTake {
     var sourceOffset: Double = 0
     var completedPass = false
 
+    func displayDuration(at playhead: Double?) -> Double {
+        guard !completedPass, let playhead else { return duration }
+        return max(0, playhead - start)
+    }
+
     func drawNotes(in context: inout GraphicsContext, from: Double, to: Double,
                    x: (Double) -> CGFloat, y: (Int) -> CGFloat, height: CGFloat, color: Color, labels: Bool = false) {
         guard let midiHistory else { return }
@@ -89,16 +94,18 @@ struct RecordingGridOverlay: View {
         // An idle recorder has no pixels. Keep its subscription, but do not
         // allocate and redraw a viewport canvas on every timeline zoom frame.
         if !preview.takes.isEmpty {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !TrackRecording.shared.recording)) { _ in
         Canvas { context,size in
             context.translateBy(x: -visibleRect.minX,y: -visibleRect.minY)
+            let position = TrackRecording.shared.recordingDisplayPosition
             for (id, take) in preview.takes {
                 guard !TrackRecording.shared.countingIn else { break }
                 guard let reservation = RecordingLaneLayout.shared.items[id], let index = tracks.firstIndex(where: { $0.id == reservation.track }) else { continue }
                 let count = RecordingLaneLayout.shared.count(for: reservation.track, existing: TrackLanes(track: tracks[index]).count)
                 let laneHeight = heights[index] / CGFloat(count)
-                // Capture buffers can lead the audible transport. Only the drawing
-                // is bounded by the same presentation clock as the playhead.
-                let duration = take.completedPass ? take.duration : min(take.duration, TrackRecording.shared.recordingDisplayPosition.map { max(0, $0 - take.start) } ?? take.duration)
+                // Only the item outline follows the playhead. The waveform is
+                // drawn as its captured samples arrive from the writer.
+                let duration = take.displayDuration(at: position)
                 guard duration > 0 else { continue }
                 let y = rulerHeight + offsets[index] + CGFloat(reservation.clip.recordingLane ?? 0) * laneHeight + itemInset
                 let rect = CGRect(x: take.start * scale, y: y, width: duration * scale,
@@ -161,6 +168,7 @@ struct RecordingGridOverlay: View {
                     ink.stroke(center,with: .color(waveColor.opacity(0.5)),lineWidth: 0.5)
                 }
             }
+        }
         }.frame(width: visibleRect.width,height: visibleRect.height)
             .offset(x: alignsToViewport ? 0 : visibleRect.minX, y: alignsToViewport ? 0 : visibleRect.minY).allowsHitTesting(false)
         }

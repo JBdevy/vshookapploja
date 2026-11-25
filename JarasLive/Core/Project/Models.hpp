@@ -29,6 +29,14 @@ struct RegionPlaylist {
 struct SetlistBlock { ID id; ID songId; std::optional<ID> playlistId; std::string name; unsigned color = 0; std::optional<ID> beforeRegionId; std::optional<bool> symbol; };
 struct RegionSetlist { std::vector<RegionPlaylist> playlists; std::optional<ID> selectedId; bool autoAdvance = false; std::optional<std::vector<SetlistBlock>> blocks; std::optional<bool> stopAtRegionEnd; std::optional<bool> prepareWithoutPlayback; std::optional<bool> automaticSubplay; std::optional<double> automaticSubplaySeconds; std::optional<bool> liveEnabled; std::optional<std::vector<ID>> playedLiveRegionIDs; bool autoUntilBlockEnd = false; std::optional<int> automaticSubplayBars; std::optional<bool> automaticSubplayNext; std::optional<std::vector<ID>> subplayExclusiveTrackIDs; };
 struct SavedProjectCursor { ID songID; double position = 0; };
+struct TimelineLocks {
+    static constexpr int regions = 1, itemPosition = 2, legacyItemMix = 4;
+    static constexpr int itemVolume = 8, itemPan = 16, itemMute = 32;
+    static constexpr int all = regions | itemPosition | itemVolume | itemPan | itemMute;
+    static constexpr int normalize(int options) noexcept {
+        return (options & all) | ((options & legacyItemMix) ? itemVolume | itemPan : 0);
+    }
+};
 struct Project {
     std::optional<std::string> reductionDraftJSON;
     std::optional<ID> projectSyncID;
@@ -49,7 +57,7 @@ struct Project {
     std::optional<unsigned> masterColor;
     std::optional<bool> timelineMovementLocked;
     std::optional<int> timelineLockOptions;
-    int configuredTimelineLocks() const noexcept { return timelineLockOptions.value_or(7) & 7; }
+    int configuredTimelineLocks() const noexcept { return TimelineLocks::normalize(timelineLockOptions.value_or(TimelineLocks::all)); }
     int effectiveTimelineLocks() const noexcept { return timelineMovementLocked.value_or(false) ? configuredTimelineLocks() : 0; }
     // Preserve imported timing through engine snapshots and project saves.
     std::optional<bool> importedTimeline;

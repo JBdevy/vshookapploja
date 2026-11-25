@@ -13,7 +13,12 @@ import SwiftUI
     static let shared = NativeSidebarResizeActivity()
     private weak var owner: NSView?
     private var retainsTimelineCoverage = false
+    private var retainsTimelineHeight = false
     private let pending = NSHashTable<NSView>.weakObjects()
+    private weak var scrollingWindow: NSWindow?
+    private let pendingScrollRows = NSHashTable<NSView>.weakObjects()
+    private var scrollDeadline: TimeInterval = 0
+    private var scrollFlush: DispatchWorkItem?
     private var observers: [NSObjectProtocol] = []
     private let viewportObservers = NSHashTable<NSView>.weakObjects()
     private(set) var contentRevision: UInt64 = 0
@@ -39,15 +44,23 @@ import SwiftUI
     func canRetainTimelineCoverage(in window: NSWindow?) -> Bool {
         retainsTimelineCoverage && window != nil && owner?.window === window
     }
+    func canRetainTimelineHeight(in window: NSWindow?) -> Bool {
+        retainsTimelineHeight && window != nil && owner?.window === window
+    }
+    func timelineHeightResizeTarget(in host: NSView) -> NSView? {
+        guard canRetainTimelineHeight(in: host.window), let owner, owner.isDescendant(of: host) else { return nil }
+        return owner
+    }
     func observeViewport(_ view: NSView & NativeSidebarResizeViewportObserver) { viewportObservers.add(view) }
     private func updateViewports() {
         for view in viewportObservers.allObjects { (view as? NativeSidebarResizeViewportObserver)?.sidebarResizeActivityChanged() }
     }
-    func begin(owner: NSView, retainsTimelineCoverage: Bool = false) {
+    func begin(owner: NSView, retainsTimelineCoverage: Bool = false, retainsTimelineHeight: Bool = false) {
         finish()
         self.owner = owner
         self.retainsTimelineCoverage = retainsTimelineCoverage
-        updateViewports()
+        self.retainsTimelineHeight = retainsTimelineHeight
+        if retainsTimelineCoverage || retainsTimelineHeight { updateViewports() }
         guard let window = owner.window else { return }
         for name in [NSWindow.didResignKeyNotification, NSWindow.didMiniaturizeNotification] {
             observers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
@@ -56,18 +69,47 @@ import SwiftUI
         }
     }
     func end(owner: NSView) { if self.owner === owner { finish() } }
-    func deferUnchangedLayout(_ view: NSView) -> Bool {
-        guard let window = owner?.window, view.window === window else { return false }
-        pending.add(view)
-        return true
+    /// Scrolling translates retained rows as a unit. Ventura otherwise runs
+    /// their unchanged SwiftUI layouts for every NSClipView bounds change.
+    func verticalScroll(in window: NSWindow?) {
+        guard let window else { return }
+        if scrollingWindow !== window { finishScroll() }
+        scrollingWindow = window
+        scrollDeadline = ProcessInfo.processInfo.systemUptime + 0.12
+        if scrollFlush == nil { scheduleScrollFlush(after: 0.12) }
+    }
+    private func scheduleScrollFlush(after delay: TimeInterval) {
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            let remaining = self.scrollDeadline - ProcessInfo.processInfo.systemUptime
+            if remaining > 0 { self.scheduleScrollFlush(after: remaining) }
+            else { self.finishScroll() }
+        }
+        scrollFlush = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+    private func finishScroll() {
+        scrollFlush?.cancel()
+        scrollFlush = nil
+        scrollingWindow = nil
+        for view in pendingScrollRows.allObjects { view.needsLayout = true }
+        pendingScrollRows.removeAllObjects()
+    }
+    func deferUnchangedLayout(_ view: NSView, duringScroll: Bool = false) -> Bool {
+        guard let window = view.window else { return false }
+        if owner?.window === window { pending.add(view); return true }
+        if duringScroll, scrollingWindow === window { pendingScrollRows.add(view); return true }
+        return false
     }
     private func finish() {
+        let changesViewport = retainsTimelineCoverage || retainsTimelineHeight
         owner = nil
         retainsTimelineCoverage = false
+        retainsTimelineHeight = false
         observers.forEach(NotificationCenter.default.removeObserver); observers.removeAll()
         for view in pending.allObjects { view.needsLayout = true }
         pending.removeAllObjects()
-        updateViewports()
+        if changesViewport { updateViewports() }
     }
 }
 
@@ -182,6 +224,10 @@ class NativeWorkspaceHostingView<Content: View>: NSHostingView<Content>, NativeT
     override func hitTest(_ point: NSPoint) -> NSView? {
         let local = convert(point, from: superview)
         guard !isHiddenOrHasHiddenAncestor, bounds.contains(local), visibleRect.contains(local) else { return nil }
+        // The grip owns this gesture until mouse-up. Ventura asks for a
+        // cursor hit test every time its frame moves; traversing all track
+        // and slot hosts there consumes much of the next display frame.
+        if let grip = NativeSidebarResizeActivity.shared.timelineHeightResizeTarget(in: self) { return grip }
         let location = convert(local, to: nil)
         if let target = NativeTimelineOverlayInputRegistration.hit(in: self, point: location) { return target }
         if let target = timelineBodyInput, target.window === window, target.isDescendant(of: self),

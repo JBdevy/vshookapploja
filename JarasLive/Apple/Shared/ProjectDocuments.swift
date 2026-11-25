@@ -1,6 +1,9 @@
 import SwiftUI
 import UniformTypeIdentifiers
 import AVFoundation
+#if os(iOS)
+import Combine
+#endif
 #if os(macOS)
 import AppKit
 import AudioToolbox
@@ -104,6 +107,11 @@ extension UTType {
     @Published private(set) var nativeStorageDirectory: URL?
     @Published private(set) var nativeStorageNeedsAccess = false
     private static let nativeStorageBookmarksKey = "jaras.nativeStorageBookmarks"
+    static var nativeFileBrowserBookmarks: [Data] {
+        let defaults = UserDefaults.standard
+        return (defaults.array(forKey: nativeStorageBookmarksKey) as? [Data] ?? [])
+            + (defaults.array(forKey: "jaras.nativeImportedProjectBookmarks") as? [Data] ?? [])
+    }
     private var restoredNativeStorageBookmarks: [Data] = []
     private var nativeStorageScopes: [URL] = []
     private var afterNativeStorage: (() -> Void)?
@@ -594,6 +602,40 @@ extension UTType {
         let project: UUID
         let session: UUID
     }
+    #if os(iOS)
+    private static func loadNativeDrop(_ provider: NSItemProvider) -> Future<URL, Error> {
+        // Future starts immediately. SwiftUI requires the request to begin
+        // before onDrop returns, even though the data may arrive later.
+        Future { complete in
+            if provider.hasItemConformingToTypeIdentifier(WorkspaceBrowserFileTransfer.type.identifier) {
+                WorkspaceBrowserFileTransfer.load(provider, completion: complete)
+            } else if provider.hasItemConformingToTypeIdentifier(LibrarySamplerTransfer.type.identifier) {
+                _ = provider.loadDataRepresentation(forTypeIdentifier: LibrarySamplerTransfer.type.identifier) { data, error in
+                    if let url = LibrarySamplerTransfer.url(data) { complete(.success(url)) }
+                    else { complete(.failure(error ?? ProjectError.invalid("Could not read the dropped file."))) }
+                }
+            } else if provider.canLoadObject(ofClass: NSURL.self) {
+                _ = provider.loadObject(ofClass: NSURL.self) { item, error in
+                    if let url = item as? URL, url.isFileURL { complete(.success(url)) }
+                    else { complete(.failure(error ?? ProjectError.invalid("Could not read the dropped file."))) }
+                }
+            } else {
+                provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, error in
+                    complete(Result {
+                        if let error { throw error }
+                        let url: URL?
+                        if let value = item as? URL { url = value }
+                        else if let value = item as? Data { url = URL(dataRepresentation: value, relativeTo: nil) }
+                        else if let value = item as? String { url = URL(string: value) }
+                        else { url = nil }
+                        guard let url, url.isFileURL else { throw ProjectError.invalid("Could not read the dropped file.") }
+                        return url
+                    })
+                }
+            }
+        }
+    }
+    #endif
     @Published var pendingAudioDrop: PendingAudioDrop?
     func importAudio(_ providers: [NSItemProvider], start: Double, track: UUID?, song: UUID, layout: AudioDropLayout? = nil, gap: Double = 0) -> Bool {
         guard show.canControl(), ready, !busy, !providers.isEmpty, let destination = currentURL,
@@ -614,12 +656,18 @@ extension UTType {
         let targets = track.flatMap { id in arrangement.tracks.contains { $0.id == id } ? [id] : nil } ?? []
         let dropLayout = layout ?? .separateTracks
         let videoTrackAvailable = arrangement.tracks.contains { $0.kind == .video }
+        #if os(iOS)
+        let nativeLoads = providers.map(Self.loadNativeDrop)
+        #endif
         busy = true; importingAudio = true; audioImportProgress = nil; status = "Importing audio…"; audioImportError = ""
         Task {
             defer { busy = false; importingAudio = false; audioImportProgress = nil }
             var prepared: StemProjectImporter.DroppedAudio?
             do {
                 var urls: [URL] = []
+                #if os(iOS)
+                for load in nativeLoads { urls.append(try await load.value) }
+                #else
                 for provider in providers {
                     if provider.hasItemConformingToTypeIdentifier(LibrarySamplerTransfer.type.identifier) {
                         let sample: URL = try await withCheckedThrowingContinuation { continuation in
@@ -645,6 +693,7 @@ extension UTType {
                     }
                     urls.append(url)
                 }
+                #endif
                 let sources = urls
                 let lyrics = sources.filter { $0.pathExtension.lowercased() == "jllyrics" }
                 if !lyrics.isEmpty {
@@ -678,7 +727,19 @@ extension UTType {
                     // Visible items request their waveform cache asynchronously.
                     // Insert first: analysis must never gate the drop or mutate
                     // the project later (which could resurrect an undone item).
-                    try show.insertAudioTracks(prepared.tracks, song: song, project: projectID)
+                    let importedPaths = Set(prepared.tracks.flatMap { track in
+                        track.clips.compactMap { $0.audioFile?.path }
+                    })
+                    let remainingMissing = missingAudioPaths.subtracting(importedPaths)
+                    let restoresMedia = remainingMissing != missingAudioPaths
+                    if restoresMedia { projectAudio.setMissingAudioPaths(remainingMissing) }
+                    do {
+                        try show.insertAudioTracks(prepared.tracks, song: song, project: projectID)
+                    } catch {
+                        if restoresMedia { projectAudio.setMissingAudioPaths(missingAudioPaths) }
+                        throw error
+                    }
+                    if restoresMedia { missingAudioPaths = remainingMissing }
                 }
             } catch {
                 if let prepared { for folder in prepared.folders { try? FileManager.default.removeItem(at: folder) } }
@@ -1130,6 +1191,7 @@ extension UTType {
         guard ready, show.hasUnsavedChanges else { return }
         #if os(macOS)
         let alert = NSAlert()
+        alert.icon = ProjectSaveAlert.appIcon
         alert.messageText = String(format: JarasLocalization.string("Do you want to save the project %@?"), show.snapshot.project.name)
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: JarasLocalization.string("Don't Save"))
@@ -2514,6 +2576,7 @@ private final class ProjectTitlebarHostingView<Content: View>: NSHostingView<Con
 }
 
 private final class ProjectTitlebarVersionView: NSView, DesktopUpdateNoticeObserver {
+    private static let edition = "Experience"
     static let text = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)
         .map { text(for: $0) } ?? "CatLive"
     static func text(for version: String) -> String {
@@ -2537,6 +2600,10 @@ private final class ProjectTitlebarVersionView: NSView, DesktopUpdateNoticeObser
         label.textColor = .white
         label.alignment = .right
         label.lineBreakMode = .byClipping
+        let title = NSMutableAttributedString(string: Self.text + " " + Self.edition,
+            attributes: [.font: NSFont.jarasSystemFont(ofSize: 11, weight: .medium), .foregroundColor: NSColor.white])
+        title.addAttribute(.foregroundColor, value: NSColor.systemYellow, range: (title.string as NSString).range(of: Self.edition))
+        label.attributedStringValue = title
         addSubview(label)
         updateButton.font = .jarasSystemFont(ofSize: 11, weight: .semibold)
         updateButton.isBordered = false
@@ -2690,7 +2757,7 @@ final class ProjectWindowAnchor: NSView {
         window.toggleFullScreen(nil)
     }
     static let editorFrameSize = NSSize(width: 1440, height: 791)
-    static let editorMinimumFrameSize = NSSize(width: 1162, height: 757)
+    static let editorMinimumFrameSize = NSSize(width: 1339, height: 757)
     static func configureChrome(of window: NSWindow) {
         // The interface already stays below the native titlebar. Extending its
         // host underneath it makes AppKit walk every control's drag-prevention
@@ -2791,9 +2858,10 @@ final class ProjectWindowAnchor: NSView {
     private func applyMinimum(_ minimum: NSSize, available: NSSize, to window: NSWindow) {
         let size = NSSize(width: min(available.width, minimum.width * interfaceScale),
                           height: min(available.height, minimum.height * interfaceScale))
-        if window.minSize != size {
-            window.contentMinSize = window.contentRect(forFrameRect: NSRect(origin: .zero, size: size)).size
-        }
+        let contentMinimum = window.contentRect(forFrameRect: NSRect(origin: .zero, size: size)).size
+        // The observer watches the content minimum. Comparing the outer frame
+        // minimum here can write the same content value and notify us again.
+        if window.contentMinSize != contentMinimum { window.contentMinSize = contentMinimum }
     }
     private func keepEditorMinimum(on window: NSWindow) {
         guard editor, configuredWindow === window else { return }

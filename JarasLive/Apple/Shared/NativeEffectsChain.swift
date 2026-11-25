@@ -453,6 +453,21 @@ final class NativeEffectsChain {
     }
     var output: AVAudioNode { outputDestination ?? outputMix }
     func setSourceChannelMode(_ mode: Int) { JarasEqualizer.setInputChannelMode(equalizer, mode: Int32(mode)) }
+    static func overlapEnvelopes(for track: Track) -> [String: Data] {
+        guard UserDefaults.standard.bool(forKey: StemLayoutPreferences.crossfadeKey), track.usesStackedStems else { return [:] }
+        let entries: [[Any]] = track.clips.compactMap { clip in
+            guard clip.duration > 0, clip.muted != true, clip.midi == nil, clip.text == nil, !clip.isImage,
+                  (clip.audioFile ?? track.audioFile) != nil else { return nil }
+            return [clip.id.uuidString.lowercased(), clip.startTime, clip.startTime + clip.duration]
+        }
+        return entries.count > 1 ? JarasEqualizer.overlapEnvelopes(entries) : [:]
+    }
+    private var overlapEnvelope: Data?
+    func setOverlapEnvelope(_ envelope: Data?) {
+        guard overlapEnvelope != envelope else { return }
+        overlapEnvelope = envelope
+        JarasEqualizer.setOverlapEnvelope(equalizer, data: envelope)
+    }
     private var itemFadeClock: (position: Double, host: UInt64, sample: Double) = (0, 0, 0)
     func configureItemFade(_ clip: AudioClip, position: Double, hostTime: UInt64 = 0, sampleTime: Double = 0) {
         itemFadeClock = (position - (clip.fadeTimelineStart ?? clip.startTime), hostTime, sampleTime)
@@ -620,8 +635,10 @@ final class NativeEffectsChain {
         observe(observedEffects)
     }
     func resetTails() {
-        for node in nodes { node.auAudioUnit.reset() }
-        for node in instanceNodes.values { (node as? AVAudioUnit)?.auAudioUnit.reset() }
+        for node in nodes where !JarasRequestNativePlaybackReset(node) { node.auAudioUnit.reset() }
+        for case let node as AVAudioUnit in instanceNodes.values where !JarasRequestNativePlaybackReset(node) {
+            node.auAudioUnit.reset()
+        }
         meterTime = 0; meterCache.removeAll(keepingCapacity: true)
         delayAnalysisPeaks.removeAll(keepingCapacity: true)
     }

@@ -1,4 +1,5 @@
 import AVFoundation
+import Combine
 import SwiftUI
 import UniformTypeIdentifiers
 #if os(macOS)
@@ -82,28 +83,502 @@ private actor LibrarySoundFontPreviewRenderer {
     }
 }
 
+#if os(iOS)
+enum WorkspaceBrowserFileTransfer {
+    static let type = UTType(exportedAs: "com.catlive.workspace-file", conformingTo: .data)
+    private struct Payload: Codable {
+        let file: URL
+        let bookmark: Data?
+    }
+
+    static func provider(_ file: URL) -> NSItemProvider {
+        let provider = NSItemProvider()
+        provider.suggestedName = file.lastPathComponent
+        provider.registerDataRepresentation(forTypeIdentifier: type.identifier, visibility: .ownProcess) { completion in
+            let scoped = file.startAccessingSecurityScopedResource()
+            defer { if scoped { file.stopAccessingSecurityScopedResource() } }
+            let bookmark = scoped ? try? file.bookmarkData() : nil
+            do {
+                completion(try JSONEncoder().encode(Payload(file: file, bookmark: bookmark)), nil)
+            } catch { completion(nil, error) }
+            return nil
+        }
+        return provider
+    }
+
+    static func load(_ provider: NSItemProvider, completion: @escaping (Result<URL, Error>) -> Void) {
+        _ = provider.loadDataRepresentation(forTypeIdentifier: type.identifier) { data, error in
+            completion(Result {
+                guard let data else {
+                    throw error ?? ProjectError.invalid("Could not read the dropped file.")
+                }
+                let payload = try JSONDecoder().decode(Payload.self, from: data)
+                var stale = false
+                let resolved = payload.bookmark.flatMap {
+                    try? URL(resolvingBookmarkData: $0, bookmarkDataIsStale: &stale)
+                } ?? payload.file
+                guard resolved.isFileURL else { throw ProjectError.invalid("Could not read the dropped file.") }
+                return resolved
+            })
+        }
+    }
+}
+#endif
+
+@MainActor private final class WorkspaceFiles: ObservableObject {
+    struct Entry: Identifiable, Sendable {
+        let url: URL
+        let name: String
+        let folder: Bool
+        var volume = false
+        var id: URL { url }
+    }
+    @Published private(set) var entries: [Entry] = []
+    @Published private(set) var path: [URL] = []
+    @Published private(set) var loading = false
+    @Published private(set) var error: String?
+    private var grantedFolders: [URL: Bool] = [:]
+    #if os(iOS)
+    private static let folderBookmarksKey = "catlive.files.folderBookmarks"
+    private var restoredFolders = false
+    #endif
+    private var past: [[URL]] = []
+    private var future: [[URL]] = []
+    private var folders: [[URL]: [Entry]] = [:]
+    private var request: UUID?
+    private var task: Task<Void, Never>?
+
+    var canGoBack: Bool { !past.isEmpty }
+    var canGoForward: Bool { !future.isEmpty }
+
+    deinit {
+        task?.cancel()
+        for (url, granted) in grantedFolders where granted { url.stopAccessingSecurityScopedResource() }
+    }
+
+    func openFolder(_ url: URL, from depth: Int) {
+        navigate(to: Array(path.prefix(depth)) + [url])
+    }
+
+    func navigate(to target: [URL]) {
+        guard target != path else { return }
+        past.append(path)
+        if past.count > 64 { past.removeFirst() }
+        future.removeAll()
+        path = target
+        refresh()
+    }
+
+    func back() {
+        guard let previous = past.popLast() else { return }
+        future.append(path)
+        path = previous
+        refresh()
+    }
+
+    func forward() {
+        guard let next = future.popLast() else { return }
+        past.append(path)
+        path = next
+        refresh()
+    }
+
+    func addFolder(_ url: URL) {
+        if grantedFolders[url] == nil { grantedFolders[url] = url.startAccessingSecurityScopedResource() }
+        #if os(iOS)
+        if let bookmark = try? url.bookmarkData() {
+            let defaults = UserDefaults.standard
+            var saved = defaults.array(forKey: Self.folderBookmarksKey) as? [Data] ?? []
+            saved.removeAll { Self.resolveBookmark($0)?.standardizedFileURL == url.standardizedFileURL }
+            saved.append(bookmark)
+            defaults.set(saved, forKey: Self.folderBookmarksKey)
+        }
+        #endif
+        folders.removeValue(forKey: [])
+        if path == [url] { refresh() }
+        else { navigate(to: [url]) }
+    }
+
+    func contents(at depth: Int) -> [Entry] {
+        depth == path.count ? entries : folders[Array(path.prefix(depth))] ?? []
+    }
+
+    func title(for url: URL, at depth: Int) -> String {
+        contents(at: depth).first { $0.url == url }?.name ?? (url.lastPathComponent.isEmpty ? url.path : url.lastPathComponent)
+    }
+
+    func mountsChanged() {
+        folders.removeAll()
+        refresh()
+    }
+
+    #if os(iOS)
+    private static func resolveBookmark(_ bookmark: Data) -> URL? {
+        var stale = false
+        return try? URL(resolvingBookmarkData: bookmark, bookmarkDataIsStale: &stale)
+    }
+
+    private func restoreFolders() {
+        guard !restoredFolders else { return }
+        restoredFolders = true
+        let saved = UserDefaults.standard.array(forKey: Self.folderBookmarksKey) as? [Data] ?? []
+        for bookmark in ProjectDocuments.nativeFileBrowserBookmarks + saved {
+            guard let url = Self.resolveBookmark(bookmark), grantedFolders[url] == nil else { continue }
+            if url.startAccessingSecurityScopedResource() { grantedFolders[url] = true }
+        }
+    }
+    #endif
+
+    func refresh() {
+        #if os(iOS)
+        restoreFolders()
+        #endif
+        task?.cancel()
+        let id = UUID(), currentPath = path, granted = Array(grantedFolders.keys)
+        let missing = (0..<currentPath.count).map { Array(currentPath.prefix($0)) }.filter { folders[$0] == nil }
+        request = id
+        entries = folders[currentPath] ?? []
+        loading = entries.isEmpty
+        error = nil
+        task = Task {
+            let (parents, result) = await Task.detached(priority: .userInitiated) {
+                let parents = missing.compactMap { ancestor -> ([URL], [Entry])? in
+                    guard let contents = try? Self.list(ancestor.last, granted: granted) else { return nil }
+                    return (ancestor, contents)
+                }
+                return (parents, Result { try Self.list(currentPath.last, granted: granted) })
+            }.value
+            guard !Task.isCancelled, request == id else { return }
+            for (ancestor, contents) in parents { folders[ancestor] = contents }
+            if folders.count > 128 {
+                let retained = Set((0..<currentPath.count).map { Array(currentPath.prefix($0)) })
+                folders = folders.filter { retained.contains($0.key) }
+            }
+            loading = false
+            switch result {
+            case .success(let contents):
+                folders[currentPath] = contents
+                entries = contents
+            case .failure(let failure):
+                entries = []
+                error = failure.localizedDescription
+            }
+        }
+    }
+
+    private nonisolated static func list(_ folder: URL?, granted: [URL]) throws -> [Entry] {
+        let manager = FileManager.default
+        if let folder {
+            let keys: Set<URLResourceKey> = [.isDirectoryKey, .isRegularFileKey, .nameKey, .isPackageKey, .contentTypeKey]
+            let entries = try manager.contentsOfDirectory(at: folder, includingPropertiesForKeys: Array(keys),
+                                                           options: [.skipsHiddenFiles])
+            return entries.compactMap { url -> Entry? in
+                guard let values = try? url.resourceValues(forKeys: keys) else { return nil }
+                let folder = values.isDirectory == true && values.isPackage != true
+                guard folder || supports(url, type: values.contentType) else { return nil }
+                return Entry(url: url, name: values.name ?? url.lastPathComponent,
+                             folder: folder)
+            }.sorted { a, b in
+                if a.folder != b.folder { return a.folder }
+                return a.name.localizedStandardCompare(b.name) == .orderedAscending
+            }
+        }
+        #if os(macOS)
+        let shortcuts = [manager.homeDirectoryForCurrentUser] + [FileManager.SearchPathDirectory.desktopDirectory, .documentDirectory, .downloadsDirectory]
+            .compactMap { manager.urls(for: $0, in: .userDomainMask).first }
+        let volumes = (manager.mountedVolumeURLs(includingResourceValuesForKeys: [.volumeNameKey], options: [.skipHiddenVolumes]) ?? [])
+            .map { url in
+                let name = (try? url.resourceValues(forKeys: [.volumeNameKey]))?.volumeName
+                return Entry(url: url, name: name ?? url.path, folder: true, volume: true)
+            }
+        let saved = (shortcuts + granted).map { Entry(url: $0, name: manager.displayName(atPath: $0.path), folder: true) }
+        var seen = Set<URL>()
+        return (volumes + saved).filter { seen.insert($0.url).inserted }
+        #else
+        let documents = manager.urls(for: .documentDirectory, in: .userDomainMask).first
+        let picked = granted.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+        var seen = Set<URL>()
+        return ([documents].compactMap { $0 } + picked)
+            .filter { seen.insert($0.standardizedFileURL).inserted }
+            .map { Entry(url: $0, name: manager.displayName(atPath: $0.path), folder: true) }
+        #endif
+    }
+    private nonisolated static func supports(_ url: URL, type contentType: UTType?) -> Bool {
+        let ext = url.pathExtension.lowercased()
+        if ["jl", "bkjl", "ziplive", "jllyrics", "mid", "midi", "sf2", "wav", "wave", "aif", "aiff",
+            "mp3", "m4a", "aac", "caf", "flac"].contains(ext) { return true }
+        #if os(macOS)
+        if ["rpp", "logicx"].contains(ext) { return true }
+        #endif
+        guard let type = contentType ?? UTType(filenameExtension: ext) else { return false }
+        return type.conforms(to: .audio) || type.conforms(to: .movie) || type.conforms(to: .image)
+    }
+}
+
+private struct WorkspaceFilesPane: View {
+    @ObservedObject var files: WorkspaceFiles
+    let theme: JarasInterfaceTheme
+    @AppStorage("catlive.files.columns") private var columns = true
+    @State private var query = ""
+    @State private var choosingFolder = false
+    @State private var selectionError: String?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            toolbar
+            breadcrumb
+            search
+            Divider()
+            #if os(iOS)
+            if files.path.isEmpty {
+                Button { choosingFolder = true } label: {
+                    Label("Browse in Files", systemImage: "folder.badge.plus")
+                        .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
+                        .foregroundStyle(JarasTheme.green)
+                        .padding(.horizontal, 8)
+                        .contentShape(Rectangle())
+                }.buttonStyle(.plain)
+                Divider()
+            }
+            #endif
+            if columns { columnBrowser }
+            else { fileList(depth: files.path.count) }
+        }
+        .font(.jarasSystem(size: 11))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear { files.refresh() }
+        .onChange(of: files.path) { _ in query = ""; selectionError = nil }
+        .fileImporter(isPresented: $choosingFolder, allowedContentTypes: [.folder]) { result in
+            switch result {
+            case .success(let url): selectionError = nil; files.addFolder(url)
+            case .failure(let error): selectionError = error.localizedDescription
+            }
+        }
+        #if os(macOS)
+        .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didMountNotification)) { _ in files.mountsChanged() }
+        .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didUnmountNotification)) { _ in files.mountsChanged() }
+        #endif
+    }
+
+    private var toolbar: some View {
+        HStack(spacing: 6) {
+            HStack(spacing: 1) {
+                button("chevron.left", "Back", action: files.back).disabled(!files.canGoBack)
+                button("chevron.right", "Forward", action: files.forward).disabled(!files.canGoForward)
+            }.background(theme.panel, in: RoundedRectangle(cornerRadius: 5))
+            button("externaldrive", "Locations") { files.navigate(to: []) }
+            #if os(macOS)
+            button("house", "Home folder") { files.navigate(to: [FileManager.default.homeDirectoryForCurrentUser]) }
+            #endif
+            button("doc", "Documents folder") {
+                if let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+                    files.navigate(to: [documents])
+                }
+            }
+            Spacer(minLength: 0)
+            HStack(spacing: 1) {
+                button("list.bullet", "List view", active: !columns) { columns = false }
+                button("rectangle.split.2x1", "Column view", active: columns) { columns = true }
+            }.background(theme.panel, in: RoundedRectangle(cornerRadius: 5))
+        }.padding(.horizontal, 7).frame(height: 33)
+    }
+
+    private var breadcrumb: some View {
+        ScrollViewReader { scroll in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 5) {
+                    Button { files.navigate(to: []) } label: {
+                        Label("Locations", systemImage: "externaldrive")
+                    }.buttonStyle(.plain)
+                    ForEach(Array(files.path.enumerated()), id: \.offset) { depth, url in
+                        Image(systemName: "chevron.right").font(.jarasSystem(size: 7)).foregroundStyle(theme.secondary)
+                        Button {
+                            files.navigate(to: Array(files.path.prefix(depth + 1)))
+                        } label: {
+                            Text(verbatim: files.title(for: url, at: depth)).fontWeight(depth == files.path.count - 1 ? .semibold : .regular)
+                        }.buttonStyle(.plain)
+                    }
+                    Color.clear.frame(width: 1).id("path-end")
+                }.padding(.horizontal, 7).frame(height: 24)
+            }.onChange(of: files.path) { _ in scroll.scrollTo("path-end", anchor: .trailing) }
+        }
+        .background(theme.panel, in: RoundedRectangle(cornerRadius: 5))
+        .padding(.horizontal, 7)
+    }
+
+    private var search: some View {
+        HStack(spacing: 4) {
+            HStack(spacing: 5) {
+                Image(systemName: "magnifyingglass").foregroundStyle(theme.secondary)
+                TextField("Search files", text: $query).textFieldStyle(.plain)
+                if !query.isEmpty {
+                    Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }
+                        .buttonStyle(.plain).accessibilityLabel(Text("Clear search"))
+                }
+            }.padding(.horizontal, 7).frame(height: 25)
+                .background(theme.display, in: RoundedRectangle(cornerRadius: 5))
+            button("arrow.clockwise", "Refresh folders", action: files.refresh)
+            button("folder.badge.plus", "Choose folder") { choosingFolder = true }
+        }.padding(.horizontal, 7).padding(.vertical, 5)
+    }
+
+    private func button(_ symbol: String, _ label: LocalizedStringKey,
+                        active: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .frame(width: 24, height: 24)
+                .foregroundStyle(active ? Color.black : Color.primary)
+                .background(active ? JarasTheme.green : Color.clear, in: RoundedRectangle(cornerRadius: 4))
+                .contentShape(Rectangle())
+        }.buttonStyle(.plain).accessibilityLabel(Text(label))
+            .accessibilityAddTraits(active ? .isSelected : [])
+    }
+
+    private var columnBrowser: some View {
+        GeometryReader { geometry in
+            ScrollViewReader { scroll in
+                ScrollView(.horizontal) {
+                    HStack(spacing: 0) {
+                        if files.path.isEmpty {
+                            fileList(depth: 0).frame(width: geometry.size.width)
+                        } else {
+                            let width = max(115, geometry.size.width / 2)
+                            ForEach(0...files.path.count, id: \.self) { depth in
+                                if depth > 0 { Divider() }
+                                fileList(depth: depth).frame(width: width).id(depth)
+                            }
+                        }
+                    }.frame(height: geometry.size.height)
+                }.onChange(of: files.path) { _ in scroll.scrollTo(files.path.count, anchor: .trailing) }
+                    .onAppear { scroll.scrollTo(files.path.count, anchor: .trailing) }
+            }
+        }
+    }
+
+    private func visibleEntries(depth: Int) -> [WorkspaceFiles.Entry] {
+        let entries = files.contents(at: depth)
+        let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return depth != files.path.count || term.isEmpty ? entries : entries.filter { $0.name.localizedStandardContains(term) }
+    }
+
+    @ViewBuilder private func fileList(depth: Int) -> some View {
+        let current = depth == files.path.count
+        let entries = visibleEntries(depth: depth)
+        if current && files.loading {
+            ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if current, let error = selectionError ?? files.error {
+            Text(verbatim: error).foregroundStyle(theme.secondary).padding(10).frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if entries.isEmpty {
+            Text(LocalizedStringKey(query.isEmpty || !current ? "Empty folder" : "No matching files"))
+                .foregroundStyle(theme.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ScrollView(.vertical) {
+                LazyVStack(spacing: 1) {
+                    ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                        let selected = files.path.indices.contains(depth) && files.path[depth] == entry.url
+                        fileRow(entry, depth: depth)
+                            .padding(.horizontal, 6).frame(height: 25)
+                            .background(selected ? JarasTheme.green.opacity(0.24) : index.isMultiple(of: 2) ? theme.panel.opacity(0.6) : .clear,
+                                        in: RoundedRectangle(cornerRadius: 4))
+                    }
+                }.padding(4)
+            }
+        }
+    }
+
+    @ViewBuilder private func fileRow(_ entry: WorkspaceFiles.Entry, depth: Int) -> some View {
+        let label = HStack(spacing: 6) {
+            Image(systemName: entry.volume ? "externaldrive" : entry.folder ? "folder.fill" : "doc")
+                .foregroundStyle(entry.folder ? JarasTheme.green : theme.secondary)
+                .frame(width: 14)
+            Text(verbatim: entry.name).lineLimit(1).truncationMode(.middle)
+            Spacer(minLength: 0)
+            if entry.folder { Image(systemName: "chevron.right").font(.jarasSystem(size: 7)) }
+        }.frame(maxWidth: .infinity, minHeight: 24).contentShape(Rectangle())
+        if entry.folder {
+            Button { files.openFolder(entry.url, from: depth) } label: { label }.buttonStyle(.plain)
+        } else {
+            #if os(iOS)
+            label.onDrag { WorkspaceBrowserFileTransfer.provider(entry.url) }
+            #else
+            label.onDrag { NSItemProvider(item: entry.url as NSURL, typeIdentifier: UTType.fileURL.identifier) }
+                .contextMenu {
+                    Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([entry.url]) }
+                }
+            #endif
+        }
+    }
+}
+
 #if os(macOS)
-/// Keep live widths inside this sidebar. Publishing them through MainView
-/// replaces the grid and Setlist hosting roots on every pointer movement.
-struct DesktopLibraryPane: View {
+struct DesktopLibraryDock: View {
     let theme: JarasInterfaceTheme
     let show: ShowController
     let available: CGFloat
+    @AppStorage("jaras.layout.library.open", store: WorkspaceLayoutPreferences.storage) private var visible = false
+
+    var body: some View {
+        DesktopLibraryPane(theme: theme, show: show, available: available, visible: visible)
+    }
+}
+
+/// Keep live widths inside this sidebar. Publishing them through MainView
+/// replaces the grid and Setlist hosting roots on every pointer movement.
+struct DesktopLibraryPane: View {
+    private struct Layout: Hashable {
+        let controller: ObjectIdentifier
+        let theme: JarasInterfaceTheme
+        let width: CGFloat
+        let maximum: CGFloat
+    }
+    let theme: JarasInterfaceTheme
+    let show: ShowController
+    let available: CGFloat
+    let visible: Bool
     @AppStorage("jaras.layout.library.width", store: WorkspaceLayoutPreferences.storage) private var saved = 344.0
     @AppStorage(WorkspaceLibrary.folderWidthKey, store: WorkspaceLayoutPreferences.storage) private var folders = WorkspaceLibrary.defaultFolderWidth
     @State private var liveWidth: Double?
+    @State private var visibilityChanges = PassthroughSubject<Bool, Never>()
     var body: some View {
         let maximum = WorkspaceLibrary.maximumWidth(folders: folders, available: available)
         let width = min(maximum, liveWidth ?? saved)
-        ResizableWorkspaceLibrary(theme: theme, show: show, width: width, maximumWidth: maximum,
-            preferredWidth: Binding(get: { liveWidth ?? saved }, set: { if $0 != liveWidth { liveWidth = $0 } }),
-            finishOuterResize: {
-                if let liveWidth, liveWidth != saved { saved = liveWidth }
-                liveWidth = nil
-            })
-            .frame(width: width)
+        let layout = Layout(controller: ObjectIdentifier(show), theme: theme, width: width, maximum: maximum)
+        RetainedWorkspacePane(width: width, visible: visible, identity: AnyHashable(layout)) {
+            ResizableWorkspaceLibrary(theme: theme, show: show, width: width, maximumWidth: maximum,
+                preferredWidth: Binding(get: { liveWidth ?? saved }, set: { if $0 != liveWidth { liveWidth = $0 } }),
+                finishOuterResize: {
+                    if let liveWidth, liveWidth != saved { saved = liveWidth }
+                    liveWidth = nil
+                }, visibilityChanges: visibilityChanges)
+        }
+        .frame(width: visible ? width : 0)
+        .accessibilityHidden(!visible)
+        .onChange(of: visible) { visibilityChanges.send($0) }
     }
 }
+private struct SamplerPaneIdentity: Hashable {
+    let project: UUID
+    let controller: ObjectIdentifier
+    let theme: JarasInterfaceTheme
+}
+
+struct DesktopSamplerPane: View {
+    let theme: JarasInterfaceTheme
+    let show: ShowController
+    let visible: Bool
+    @State private var visibilityChanges = PassthroughSubject<Bool, Never>()
+    var body: some View {
+        GeometryReader { geometry in
+            RetainedWorkspacePane(width: geometry.size.width, visible: visible,
+                identity: AnyHashable(SamplerPaneIdentity(project: show.snapshot.project.id,
+                    controller: ObjectIdentifier(show), theme: theme))) {
+                WorkspaceLibrary(theme: theme, show: show, samplersOnly: true, visibilityChanges: visibilityChanges)
+            }
+        }.allowsHitTesting(visible).accessibilityHidden(!visible)
+            .onChange(of: visible) { visibilityChanges.send($0) }
+    }
+}
+
 #endif
 
 private func clampedFolderWidth(_ requested: CGFloat, panel: CGFloat) -> CGFloat {
@@ -149,13 +624,26 @@ struct ResizableWorkspaceLibrary: View {
     let maximumWidth: CGFloat
     @Binding var preferredWidth: Double
     var finishOuterResize: (() -> Void)? = nil
+    var visibilityChanges: PassthroughSubject<Bool, Never>? = nil
 
     @AppStorage(WorkspaceLibrary.folderWidthKey, store: WorkspaceLayoutPreferences.storage)
     private var folderWidth = WorkspaceLibrary.defaultFolderWidth
     @State private var dragStart: CGFloat?
 
+    private struct Catalog: View, Equatable {
+        let theme: JarasInterfaceTheme
+        let show: ShowController
+        let visibilityChanges: PassthroughSubject<Bool, Never>?
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.theme == rhs.theme && lhs.show === rhs.show && lhs.visibilityChanges === rhs.visibilityChanges
+        }
+        var body: some View {
+            WorkspaceLibrary(theme: theme, show: show, visibilityChanges: visibilityChanges)
+        }
+    }
+
     var body: some View {
-        WorkspaceLibrary(theme: theme, show: show)
+        Catalog(theme: theme, show: show, visibilityChanges: visibilityChanges).equatable()
             .overlay(alignment: .trailing) {
                 libraryResizeEdge(theme: theme, label: "Resize Library", value: width, maximum: maximumWidth,
                                   affectsTimeline: true, start: $dragStart,
@@ -216,6 +704,17 @@ private struct LibraryNote: Codable, Identifiable {
         (try? JSONDecoder().decode([Self].self, from: data)) ?? []
     }
 
+    @MainActor
+    static func saveText(_ text: String, for id: UUID) {
+        let storage = WorkspaceLayoutPreferences.storage
+        var notes = decode(storage.data(forKey: storageKey) ?? Data())
+        guard let index = notes.firstIndex(where: { $0.id == id }), notes[index].text != text else { return }
+        notes[index].text = text
+        if let updated = try? JSONEncoder().encode(notes) {
+            storage.set(updated, forKey: storageKey)
+        }
+    }
+
     static func saving(_ note: Self, name: String, in notes: [Self]) -> [Self] {
         var updated = notes
         if let index = updated.firstIndex(where: { $0.id == note.id }) {
@@ -261,16 +760,78 @@ private struct LibraryNoteNameInput: View {
 }
 
 private struct LibraryNoteEditor: View {
-    @Binding var text: String
+    let note: LibraryNote
+    let confirm: () -> Void
+
     var body: some View {
         Group {
             #if os(macOS)
-            TextItemNotepad(text: $text, apply: {}, cancel: {})
+            TextItemNotepad(text: .constant(note.text), apply: confirm, cancel: {},
+                            saveNote: { LibraryNote.saveText($0, for: note.id) })
             #else
-            NativeFullLyricsInput(text: $text, outlineStanzas: false,
-                                  font: UIFont(name: CatLiveTypeface.name(nil), size: 15) ?? .systemFont(ofSize: 15))
+            let text = Binding(get: { note.text }, set: { LibraryNote.saveText($0, for: note.id) })
+            NativeFullLyricsInput(text: text, outlineStanzas: false,
+                                  font: UIFont(name: CatLiveTypeface.name(nil), size: 15) ?? .systemFont(ofSize: 15),
+                                  startsEditingOnAppear: true)
             #endif
         }.accessibilityLabel("Notes").padding(5)
+    }
+}
+
+private struct LibraryNoteReadingView: View {
+    let text: String
+
+    private var styledText: AttributedString {
+        var result = AttributedString()
+        for run in ItemTextColors.runs(text) {
+            var value = AttributedString(run.text)
+            value.foregroundColor = run.color.map { Color(hex: $0) } ?? JarasTheme.text
+            result += value
+        }
+        return result
+    }
+
+    var body: some View {
+        ScrollView {
+            Text(styledText)
+                .font(.jarasSystem(size: 14))
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(10)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(JarasTheme.background)
+        .padding(5)
+    }
+}
+
+private struct EditableLibraryNote<Header: View>: View {
+    let note: LibraryNote
+    @ViewBuilder let header: () -> Header
+    @State private var editing = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                header().frame(maxWidth: .infinity, alignment: .leading)
+                Button { editing.toggle() } label: {
+                    Image(systemName: editing ? "checkmark" : "pencil")
+                        .font(.system(size: 14, weight: .semibold))
+                        .frame(width: 28, height: 24)
+                        .foregroundStyle(editing ? Color.black : JarasTheme.text)
+                        .background(editing ? JarasTheme.green : Color(hex: 0x454545),
+                                    in: RoundedRectangle(cornerRadius: 5))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(editing ? Text("Confirm note edit") : Text("Edit note"))
+                .accessibilityIdentifier("notes-edit-toggle")
+            }.padding(5)
+            if editing {
+                LibraryNoteEditor(note: note) { editing = false }
+            } else {
+                LibraryNoteReadingView(text: note.text)
+            }
+        }
+        .frame(maxHeight: .infinity, alignment: .top)
     }
 }
 
@@ -361,8 +922,16 @@ private struct LibraryDockPickerList<Content: View>: View {
     }
 }
 
-struct WorkspaceNotesDock: View {
+@MainActor struct WorkspaceNotesDock: View {
+    enum Tab: String, CaseIterable {
+        case notes = "Notes"
+        case region = "Region"
+        case markers = "Markers"
+    }
     let theme: JarasInterfaceTheme
+    let show: ShowController
+    @Binding var tab: Tab
+    let closeSetlist: () -> Void
     @AppStorage(LibraryNote.storageKey, store: WorkspaceLayoutPreferences.storage) private var storedNotes = Data()
     @State private var selection: UUID?
     @State private var namingNote: LibraryNote?
@@ -373,49 +942,77 @@ struct WorkspaceNotesDock: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            LibraryDockPickerButton(title: "Notes", current: activeNote?.title ?? JarasLocalization.string("Notes")) {
-                namingNote = nil
-                showingPicker.toggle()
-            }
-            .padding(5)
-            .popover(isPresented: $showingPicker, arrowEdge: .bottom) {
-                if let namingNote {
-                    LibraryNoteNameInput(note: namingNote) { name in
-                        persist(LibraryNote.saving(namingNote, name: name, in: notes))
-                        selection = namingNote.id
-                        showingPicker = false
-                    }
-                } else {
-                    LibraryDockPickerList(rowCount: notes.count + (activeNote == nil ? 1 : 2), hasSeparator: !notes.isEmpty) {
-                        LibraryDockPickerRow(title: JarasLocalization.string("Create")) { namingNote = LibraryNote() }
-                        if let activeNote {
-                            LibraryDockPickerRow(title: JarasLocalization.string("Rename note")) { namingNote = activeNote }
-                            LibraryDockPickerList<EmptyView>.separator
+            HStack(spacing: 4) {
+                ForEach(Tab.allCases, id: \.self) { item in
+                    Button {
+                        if item != .notes {
+                            closeSetlist()
+                            show.libraryTimelineSelection.openedPane.send(.dock)
                         }
-                        ForEach(notes) { note in
-                            LibraryDockPickerRow(title: note.title, selected: activeNote?.id == note.id) {
-                                selection = note.id
-                                showingPicker = false
-                            }
+                        tab = item
+                        showingPicker = false
+                    } label: {
+                        Text(verbatim: item.rawValue)
+                            .font(.jarasSystem(size: 11, weight: .semibold))
+                            .frame(maxWidth: .infinity).frame(height: 25)
+                            .foregroundStyle(tab == item ? Color.black : JarasTheme.text)
+                            .background(tab == item ? JarasTheme.green : Color.white.opacity(0.07),
+                                        in: RoundedRectangle(cornerRadius: 4))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(tab == item ? .isSelected : [])
+                }
+            }.padding(5)
+            if tab == .notes {
+                notesPanel
+            } else {
+                LibraryTimelineList(show: show, regions: tab == .region, docked: true)
+                    .id(tab)
+            }
+        }.frame(maxHeight: .infinity, alignment: .top)
+            .background(theme.mixerPanelBackground).foregroundStyle(JarasTheme.text)
+            .onReceive(show.libraryTimelineSelection.openedPane) { pane in
+                if pane == .library { tab = .notes }
+            }
+    }
+
+    @ViewBuilder private var notesPanel: some View {
+        if let note = activeNote {
+            EditableLibraryNote(note: note) { notePicker }
+                .id(note.id)
+        } else {
+            notePicker.padding(5).frame(maxHeight: .infinity, alignment: .top)
+        }
+    }
+
+    private var notePicker: some View {
+        LibraryDockPickerButton(title: "Notes", current: activeNote?.title ?? JarasLocalization.string("Notes")) {
+            namingNote = nil
+            showingPicker.toggle()
+        }
+        .popover(isPresented: $showingPicker, arrowEdge: .bottom) {
+            if let namingNote {
+                LibraryNoteNameInput(note: namingNote) { name in
+                    persist(LibraryNote.saving(namingNote, name: name, in: notes))
+                    selection = namingNote.id
+                    showingPicker = false
+                }
+            } else {
+                LibraryDockPickerList(rowCount: notes.count + (activeNote == nil ? 1 : 2), hasSeparator: !notes.isEmpty) {
+                    LibraryDockPickerRow(title: JarasLocalization.string("Create")) { namingNote = LibraryNote() }
+                    if let activeNote {
+                        LibraryDockPickerRow(title: JarasLocalization.string("Rename note")) { namingNote = activeNote }
+                        LibraryDockPickerList<EmptyView>.separator
+                    }
+                    ForEach(notes) { note in
+                        LibraryDockPickerRow(title: note.title, selected: activeNote?.id == note.id) {
+                            selection = note.id
+                            showingPicker = false
                         }
                     }
                 }
             }
-            if let note = activeNote {
-                LibraryNoteEditor(text: Binding(
-                    get: { notes.first { $0.id == note.id }?.text ?? "" },
-                    set: { text in
-                        var updated = notes
-                        guard let index = updated.firstIndex(where: { $0.id == note.id }) else { return }
-                        updated[index].text = text
-                        persist(updated)
-                    }
-                )).id(note.id)
-            } else {
-                Color.clear
-            }
-        }.frame(maxHeight: .infinity, alignment: .top)
-            .background(theme.mixerPanelBackground).foregroundStyle(JarasTheme.text)
+        }
     }
 
     private func persist(_ notes: [LibraryNote]) {
@@ -437,6 +1034,7 @@ struct WorkspaceLibrary: View {
         case padSamplers
         case nativeSamplers(String)
         case midiChords(String)
+        case midiCategory(UUID)
         case preset(String)
         case favoritePlugins, favoriteSamplers
         case annotation(UUID)
@@ -449,7 +1047,7 @@ struct WorkspaceLibrary: View {
         let name: String
     }
 
-    private struct Sampler: Identifiable {
+    private struct Sampler: Identifiable, Sendable {
         let url: URL
         var id: URL { url }
         var favoriteKey: String { url.deletingLastPathComponent().lastPathComponent + "/" + url.lastPathComponent }
@@ -457,7 +1055,9 @@ struct WorkspaceLibrary: View {
     }
 
     private static let nativeSampleRoot = Bundle.main.resourceURL?.appendingPathComponent("NativeSamples", isDirectory: true)
-    private static let nativeSampleCategories = ["Cymbals", "FX", "FX Brazil", "Kick", "Percussion", "Snare", "Toms"]
+    private static let voiceGuideCategories = ["Guia Pack PT-BR 1", "Guia Pack PT-BR 2", "Guia Pack ENG 1", "Guia Pack ENG 2"]
+    private static let otherNativeSampleCategories = ["Cymbals", "FX", "FX Brazil", "Kick", "Percussion", "Snare", "Toms"]
+    private static let nativeSampleCategories = voiceGuideCategories + otherNativeSampleCategories
 
     private static let nativeTypes: [String: String] = [
         "EQ": "EQ", "Compressor": "Dynamics", "Pitch": "Pitch Shift", "Delay": "Delay",
@@ -468,18 +1068,25 @@ struct WorkspaceLibrary: View {
     let theme: JarasInterfaceTheme
     let show: ShowController
     var samplersOnly = false
+    var visibilityChanges: PassthroughSubject<Bool, Never>? = nil
     @ObservedObject private var instruments = InstrumentLibrary.shared
     #if os(macOS)
     @ObservedObject private var plugins = PluginCatalog.shared
     #endif
     @AppStorage(LibraryNote.storageKey, store: WorkspaceLayoutPreferences.storage) private var storedNotes = Data()
     @AppStorage("jaras.library.samplerCategories", store: WorkspaceLayoutPreferences.storage) private var storedSamplerCategories = Data()
+    @AppStorage("jaras.library.midiCategories", store: WorkspaceLayoutPreferences.storage) private var storedMIDICategories = Data()
     @AppStorage("jaras.library.favorites", store: WorkspaceLayoutPreferences.storage) private var storedFavorites = Data()
     @AppStorage("jaras.library.samplerPreviewDB", store: WorkspaceLayoutPreferences.storage) private var samplerPreviewDB = 0.0
     @State private var instrumentsExpanded = false
     @State private var pluginsExpanded = false
     @State private var samplersExpanded = false
     @State private var midiExpanded = false
+    @State private var midiUserExpanded = false
+    @State private var creatingMIDICategory = false
+    @State private var midiFiles: [URL] = []
+    @State private var importingMIDI = false
+    @State private var midiImportError = ""
     @State private var userExpanded = false
     @State private var presetsExpanded = false
     @State private var favoritesExpanded = false
@@ -487,6 +1094,8 @@ struct WorkspaceLibrary: View {
     @State private var namingNote: LibraryNote?
     @State private var creatingCategory = false
     @State private var showingSamplerPicker = false
+    @State private var showingFiles = false
+    @StateObject private var files = WorkspaceFiles()
     @State private var categoryName = ""
     @State private var categoryToDelete: SamplerCategory?
     @State private var deletingPadSamples = false
@@ -495,6 +1104,7 @@ struct WorkspaceLibrary: View {
     @State private var pickingSamplers = false
     @State private var samplerDestination: SamplerCategory?
     @State private var samplerFiles: [Sampler] = []
+    @State private var samplerListRequest = UUID()
     @State private var samplerError = ""
     @State private var importingSamplers = false
     @State private var preview: (id: UUID, url: URL, instrumentID: String?)?
@@ -551,10 +1161,18 @@ struct WorkspaceLibrary: View {
     }
     private var samplerPickerEntries: [(name: String, target: Selection)] {
         var entries = samplerCategories.map { (name: $0.name, target: Selection.samplerCategory($0.id)) }
+        entries.append(contentsOf: Self.voiceGuideCategories.map { (name: $0, target: .nativeSamplers($0)) })
         if hasPadSamples { entries.append((name: "Pads", target: .padSamplers)) }
-        entries.append(contentsOf: Self.nativeSampleCategories.map { (name: $0, target: .nativeSamplers($0)) })
+        entries.append(contentsOf: Self.otherNativeSampleCategories.map { (name: $0, target: .nativeSamplers($0)) })
         return entries
     }
+    private func nativeSamplerFolders(_ categories: [String]) -> some View {
+        ForEach(Array(categories.enumerated()), id: \.element) { index, category in
+            navigationRow(category, icon: "folder.fill", target: .nativeSamplers(category),
+                          shaded: index.isMultiple(of: 2))
+        }
+    }
+
     private var favoriteKeys: Set<String> {
         Set((try? JSONDecoder().decode([String].self, from: storedFavorites)) ?? [])
     }
@@ -573,12 +1191,19 @@ struct WorkspaceLibrary: View {
                         }
                     if instrumentsExpanded {
                         ForEach(Array(InstrumentCategory.allCases.enumerated()), id: \.element) { index, category in
-                            navigationRow(category == .pianos ? "Grand Pianos" : category.rawValue,
+                            navigationRow(category.displayName,
                                           icon: "folder.fill", target: .instrument(category), shaded: index.isMultiple(of: 2))
                         }
                     }
                     Divider().padding(.vertical, 3)
                     folder("Plugins", expanded: $pluginsExpanded, shaded: true, icon: "library.plugins")
+                        #if os(macOS)
+                        .contextMenu {
+                            Button("Scan Plugins") {
+                                NotificationCenter.default.post(name: .catLiveOpenPluginSettings, object: show)
+                            }
+                        }
+                        #endif
                     if pluginsExpanded {
                         navigationRow("All", icon: "square.grid.2x2", target: .plugins(nil), shaded: false)
                         navigationRow("Native", icon: "folder.fill", target: .plugins("Native"), shaded: true)
@@ -597,7 +1222,7 @@ struct WorkspaceLibrary: View {
                                 }
                             }
                             .popover(isPresented: $creatingCategory, arrowEdge: .trailing) {
-                                categoryInput
+                                categoryInput()
                             }
                         if userExpanded {
                             ForEach(Array(samplerCategories.enumerated()), id: \.element.id) { index, category in
@@ -615,18 +1240,25 @@ struct WorkspaceLibrary: View {
                                     }
                             }
                         }
+                        nativeSamplerFolders(Self.voiceGuideCategories)
                         if hasPadSamples {
                             navigationRow("Pads", icon: "folder.fill", target: .padSamplers, shaded: true)
                                 .contextMenu { Button("Delete", role: .destructive) { deletingPadSamples = true } }
                         }
-                        ForEach(Array(Self.nativeSampleCategories.enumerated()), id: \.element) { index, category in
-                            navigationRow(category, icon: "folder.fill", target: .nativeSamplers(category),
-                                          shaded: index.isMultiple(of: 2))
-                        }
+                        nativeSamplerFolders(Self.otherNativeSampleCategories)
                     }
                     divider
                     folder("Midi", expanded: $midiExpanded, shaded: true, icon: "pianokeys")
                     if midiExpanded {
+                        folder("User", expanded: $midiUserExpanded, shaded: false)
+                            .contextMenu { Button("Create category") { categoryName = ""; creatingMIDICategory = true } }
+                            .popover(isPresented: $creatingMIDICategory, arrowEdge: .trailing) { categoryInput(midi: true) }
+                        if midiUserExpanded {
+                            ForEach(midiCategories) { category in
+                                navigationRow(category.name, icon: "folder.fill", target: .midiCategory(category.id), shaded: false)
+                                    .onDrop(of: [.midi, .fileURL], isTargeted: nil) { dropMIDI($0, into: category.id) }
+                            }
+                        }
                         ForEach(LibraryMIDIChord.categories, id: \.self) { category in
                             navigationRow(category, icon: "folder.fill", target: .midiChords(category), shaded: false)
                         }
@@ -683,12 +1315,21 @@ struct WorkspaceLibrary: View {
         Group {
             if samplersOnly {
                 VStack(spacing: 0) {
-                    samplerToolbar
-                    samplerDropArea(details)
+                    HStack(spacing: 4) {
+                        samplerPaneTab("Samplers", filesTab: false)
+                        samplerPaneTab("Files", filesTab: true)
+                    }.padding(5)
+                    Divider()
+                    if showingFiles {
+                        WorkspaceFilesPane(files: files, theme: theme)
+                    } else {
+                        samplerToolbar
+                        samplerDropArea(details)
+                    }
                 }
             } else {
                 LibraryColumns(theme: theme, folders: folders, entries: VStack(spacing: 0) {
-                    if showsSearch { searchField }
+                    if showsSearch && selection != .regions && selection != .markers { searchField }
                     #if os(iOS)
                     details.fileImporter(isPresented: $pickingSoundFonts, allowedContentTypes: [UTType(filenameExtension: "sf2") ?? .data],
                                          allowsMultipleSelection: true, onCompletion: importSoundFonts)
@@ -711,8 +1352,22 @@ struct WorkspaceLibrary: View {
                 instruments.refresh(); loadPresets()
             }
         }
+        .onReceive(show.libraryTimelineSelection.openedPane) { pane in
+            if pane == .dock && (selection == .regions || selection == .markers) { selection = nil }
+        }
         .onReceive(NotificationCenter.default.publisher(for: VinhetasController.padSamplesChanged)) { _ in refreshPadSamples() }
         .onDisappear { stopPreview() }
+        .onReceive(visibilityChanges?.eraseToAnyPublisher() ?? Empty().eraseToAnyPublisher()) { visible in
+            if !visible { stopPreview() }
+            else if samplersOnly {
+                refreshPadSamples()
+                if !samplerPickerEntries.contains(where: { $0.target == selection }) {
+                    selection = samplerPickerEntries.first?.target
+                } else if selection != .padSamplers && selection != .favoriteSamplers {
+                    loadSamplers()
+                }
+            }
+        }
         .onChange(of: samplerPreviewDB) { _ in
             if let preview, preview.instrumentID == nil { projectAudio.setPadGain(preview.id, gain: samplerPreviewGain) }
         }
@@ -746,10 +1401,30 @@ struct WorkspaceLibrary: View {
         }
         .task(id: selection) {
             switch selection {
-            case .samplerCategory, .padSamplers, .nativeSamplers, .favoriteSamplers: loadSamplers()
+            case .samplerCategory, .padSamplers, .nativeSamplers, .favoriteSamplers:
+                samplerFiles = []; loadSamplers()
+            case .midiCategory(let id):
+                midiFiles = []; midiImportError = ""
+                await loadMIDI(id)
             default: break
             }
         }
+    }
+
+    private func samplerPaneTab(_ title: LocalizedStringKey, filesTab: Bool) -> some View {
+        let selected = showingFiles == filesTab
+        return Button {
+            guard !selected else { return }
+            stopPreview()
+            showingSamplerPicker = false
+            showingFiles = filesTab
+        } label: {
+            Text(title).font(.jarasSystem(size: 11, weight: .semibold)).lineLimit(1)
+                .frame(maxWidth: .infinity, minHeight: 23)
+                .foregroundStyle(selected ? Color.black : JarasTheme.text)
+                .background(selected ? JarasTheme.green : theme.panel, in: RoundedRectangle(cornerRadius: 5))
+                .contentShape(Rectangle())
+        }.buttonStyle(.plain).accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private var folderToolbar: some View {
@@ -760,6 +1435,7 @@ struct WorkspaceLibrary: View {
                 pluginsExpanded = false
                 samplersExpanded = false
                 midiExpanded = false
+                midiUserExpanded = false
                 userExpanded = false
                 presetsExpanded = false
                 favoritesExpanded = false
@@ -797,7 +1473,12 @@ struct WorkspaceLibrary: View {
     }
 
     private func navigationRow(_ name: String, icon: String, target: Selection, shaded: Bool) -> some View {
-        Button { selection = target } label: {
+        Button {
+            selection = target
+            if target == .regions || target == .markers {
+                show.libraryTimelineSelection.openedPane.send(.library)
+            }
+        } label: {
             row(name, icon: icon, chevron: nil, shaded: shaded, selected: selection == target)
         }.buttonStyle(.plain)
     }
@@ -865,6 +1546,8 @@ struct WorkspaceLibrary: View {
             pluginList(type: type)
         case .samplerCategory, .padSamplers, .nativeSamplers, .favoriteSamplers:
             samplerList
+        case .midiCategory(let id):
+            midiList(id)
         case .midiChords(let category):
             ScrollView {
                 LazyVStack(spacing: 2) {
@@ -889,7 +1572,7 @@ struct WorkspaceLibrary: View {
         case .annotation(let note):
             annotation(note)
         case .regions, .markers:
-            LibraryTimelineList(show: show, regions: selection == .regions, matches: matchesSearch)
+            LibraryTimelineList(show: show, regions: selection == .regions, docked: false)
                 .id(selection)
         case nil:
             Color.clear
@@ -1116,16 +1799,16 @@ struct WorkspaceLibrary: View {
         }
     }
 
-    private func annotation(_ id: UUID) -> some View {
-        LibraryNoteEditor(text: Binding(
-            get: { notes.first(where: { $0.id == id })?.text ?? "" },
-            set: { text in
-                var updated = notes
-                guard let index = updated.firstIndex(where: { $0.id == id }) else { return }
-                updated[index].text = text
-                saveNotes(updated)
+    @ViewBuilder private func annotation(_ id: UUID) -> some View {
+        if let note = notes.first(where: { $0.id == id }) {
+            EditableLibraryNote(note: note) {
+                Text(verbatim: note.title)
+                    .font(.jarasSystem(size: 12, weight: .semibold))
+                    .lineLimit(1)
+                    .padding(.leading, 6)
             }
-        )).id(id)
+            .id(id)
+        }
     }
 
     private func saveNotes(_ updated: [LibraryNote]) {
@@ -1147,7 +1830,7 @@ struct WorkspaceLibrary: View {
             showingSamplerPicker.toggle()
         }.padding(5)
         .popover(isPresented: $showingSamplerPicker, arrowEdge: .bottom) {
-            if creatingCategory { categoryInput }
+            if creatingCategory { categoryInput() }
             else {
                 let entries = samplerPickerEntries
                 LibraryDockPickerList(rowCount: entries.count + 1, hasSeparator: !entries.isEmpty) {
@@ -1196,28 +1879,155 @@ struct WorkspaceLibrary: View {
         return true
     }
 
-    private var categoryInput: some View {
+    private func categoryInput(midi: Bool = false) -> some View {
         let name = categoryName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let valid = !name.isEmpty && !samplerCategories.contains { $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame }
+        let valid = !name.isEmpty && !(midi ? midiCategories : samplerCategories).contains { $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame }
         return VStack(alignment: .leading, spacing: 8) {
             Text("Create category").font(.jarasSystem(size: 13, weight: .semibold))
             TextField("Name", text: $categoryName)
                 .onChange(of: categoryName) { name in
                     if name.count > 12 { categoryName = String(name.prefix(12)) }
                 }
-                .onSubmit { if valid { createCategory(name) } }
-            Button("Create") { createCategory(name) }.disabled(!valid)
+                .onSubmit { if valid { createCategory(name, midi: midi) } }
+            Button("Create") { createCategory(name, midi: midi) }.disabled(!valid)
         }.padding(12).frame(width: 195)
     }
 
-    private func createCategory(_ name: String) {
+    private func createCategory(_ name: String, midi: Bool) {
         let category = SamplerCategory(name: String(name.prefix(12)))
+        if midi {
+            guard let encoded = try? JSONEncoder().encode(midiCategories + [category]) else { return }
+            storedMIDICategories = encoded
+            midiUserExpanded = true
+            selection = .midiCategory(category.id)
+            creatingMIDICategory = false
+            return
+        }
         guard let encoded = try? JSONEncoder().encode(samplerCategories + [category]) else { return }
         storedSamplerCategories = encoded
         userExpanded = true
         selection = .samplerCategory(category.id)
         creatingCategory = false
         showingSamplerPicker = false
+    }
+
+    private var midiCategories: [SamplerCategory] {
+        ((try? JSONDecoder().decode([SamplerCategory].self, from: storedMIDICategories)) ?? [])
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    private func midiList(_ id: UUID) -> some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                LazyVStack(spacing: 2) {
+                    ForEach(midiFiles.filter { matchesSearch($0.deletingPathExtension().lastPathComponent) }, id: \.self) { url in
+                        HStack(spacing: 6) {
+                            ControlIcon(name: "pianokeys", size: 13)
+                            Text(verbatim: url.deletingPathExtension().lastPathComponent).lineLimit(1)
+                            Spacer()
+                        }
+                        .padding(.horizontal, 8).frame(height: 27)
+                        .contentShape(Rectangle())
+                        .onDrag { NSItemProvider(object: url as NSURL) }
+                    }
+                }
+            }
+            if importingMIDI { ProgressView().controlSize(.small).padding(8) }
+            if !midiImportError.isEmpty {
+                Text(verbatim: midiImportError).font(.jarasCaption).foregroundStyle(.red).padding(8)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .onDrop(of: [.midi, .fileURL], isTargeted: nil) { dropMIDI($0, into: id) }
+        .background {
+            LibraryKeyboardArea { code in
+                guard code == 9 else { return false }
+                pasteMIDI(into: id)
+                return true
+            }
+        }
+    }
+
+    private func loadMIDI(_ id: UUID) async {
+        let files = await LibraryMIDIStorage.shared.files(in: id)
+        if !Task.isCancelled && selection == .midiCategory(id) { midiFiles = files }
+    }
+
+    private func pasteMIDI(into id: UUID) {
+        #if os(macOS)
+        let clipboard = GridMediaClipboard.shared
+        let items: GridItemClipboard?
+        switch clipboard.source() {
+        case .items: items = clipboard.items
+        case .files(let urls):
+            importMIDI(into: id) { await LibraryMIDIStorage.shared.copy(urls, into: id) }
+            return
+        default: items = nil
+        }
+        #else
+        let items = show.copiedGridItems
+        #endif
+        let clips = items?.moving == false ? items?.entries.map(\.clip).filter { $0.midi != nil } ?? [] : []
+        guard !clips.isEmpty else {
+            midiImportError = JarasLocalization.string("Copy one or more MIDI items first.")
+            return
+        }
+        importMIDI(into: id) { await LibraryMIDIStorage.shared.export(clips, into: id) }
+    }
+
+    private func dropMIDI(_ providers: [NSItemProvider], into id: UUID) -> Bool {
+        guard !providers.isEmpty, !importingMIDI else { return false }
+        selection = .midiCategory(id)
+        importMIDI(into: id) {
+            var failures: [String] = []
+            for provider in providers {
+                do {
+                    let (name, data) = try await Self.readDroppedMIDI(provider)
+                    try await LibraryMIDIStorage.shared.saveFile(data, named: name, into: id)
+                } catch { failures.append(error.localizedDescription) }
+            }
+            return failures
+        }
+        return true
+    }
+
+    private func importMIDI(into id: UUID, using work: @escaping @MainActor () async -> [String]) {
+        guard !importingMIDI else { return }
+        importingMIDI = true
+        midiImportError = ""
+        Task { @MainActor in
+            let failures = await work()
+            importingMIDI = false
+            guard selection == .midiCategory(id) else { return }
+            await loadMIDI(id)
+            if selection == .midiCategory(id) { midiImportError = failures.joined(separator: "\n") }
+        }
+    }
+
+    nonisolated private static func readDroppedMIDI(_ provider: NSItemProvider) async throws -> (String, Data) {
+        let result: Result<(String, Data), Error> = await withCheckedContinuation { continuation in
+            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                _ = provider.loadObject(ofClass: NSURL.self) { item, error in
+                    continuation.resume(returning: Result {
+                        guard let url = (item as? NSURL).map({ $0 as URL }) else {
+                            throw error ?? ProjectError.invalid("Invalid MIDI file.")
+                        }
+                        return (url.deletingPathExtension().lastPathComponent, try LibraryMIDIStorage.read(url))
+                    })
+                }
+            } else {
+                let suggestedName = provider.suggestedName
+                _ = provider.loadFileRepresentation(forTypeIdentifier: UTType.midi.identifier) { url, error in
+                    continuation.resume(returning: Result {
+                        guard let url else { throw error ?? ProjectError.invalid("Invalid MIDI file.") }
+                        let name = suggestedName.map { ($0 as NSString).deletingPathExtension } ?? url.deletingPathExtension().lastPathComponent
+                        return (name, try LibraryMIDIStorage.read(url, checkExtension: false))
+                    })
+                }
+            }
+        }
+        return try result.get()
     }
 
     private func deleteCategory(_ category: SamplerCategory) {
@@ -1259,7 +2069,7 @@ struct WorkspaceLibrary: View {
     }
 
     private func padSamplers() -> [Sampler] {
-        samplers(in: VinhetasController.shared.padSampleDirectory).filter { VinhetasPad.accepts($0.url) }
+        Self.samplers(in: VinhetasController.shared.padSampleDirectory).filter { VinhetasPad.accepts($0.url) }
     }
 
     private func deletePadSamples() {
@@ -1274,31 +2084,47 @@ struct WorkspaceLibrary: View {
     }
 
     private func loadSamplers() {
+        let token = UUID()
+        samplerListRequest = token
         samplerError = ""
-        switch selection {
+        let requested = selection
+        var folders: [(url: URL, audioOnly: Bool)] = []
+        var favorites: Set<String>?
+        switch requested {
         case .samplerCategory(let id):
-            samplerFiles = samplers(in: try? Self.samplerDirectory(id))
+            if let folder = try? Self.samplerDirectory(id) { folders.append((folder, false)) }
         case .padSamplers:
-            samplerFiles = padSamplers()
+            folders.append((VinhetasController.shared.padSampleDirectory, true))
         case .nativeSamplers(let name):
-            samplerFiles = nativeSamplers(in: name)
+            if let root = Self.nativeSampleRoot { folders.append((root.appendingPathComponent(name), true)) }
         case .favoriteSamplers:
-            let keys = favoriteKeys
-            let user = samplerCategories.flatMap { samplers(in: try? Self.samplerDirectory($0.id)) }
-            let native = Self.nativeSampleCategories.flatMap { nativeSamplers(in: $0) }
-            samplerFiles = (user + padSamplers() + native).filter { keys.contains($0.favoriteKey) }
-                .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+            favorites = favoriteKeys
+            folders = samplerCategories.compactMap { category in
+                (try? Self.samplerDirectory(category.id)).map { ($0, false) }
+            }
+            folders.append((VinhetasController.shared.padSampleDirectory, true))
+            if let root = Self.nativeSampleRoot {
+                folders += Self.nativeSampleCategories.map { (root.appendingPathComponent($0), true) }
+            }
         default:
             samplerFiles = []
+            return
+        }
+        Task { @MainActor [folders, favorites] in
+            let files = await Task.detached(priority: .userInitiated) {
+                let entries = folders.flatMap { folder in
+                    Self.samplers(in: folder.url).filter { !folder.audioOnly || VinhetasPad.accepts($0.url) }
+                }
+                guard let favorites else { return entries }
+                return entries.filter { favorites.contains($0.favoriteKey) }
+                    .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+            }.value
+            guard samplerListRequest == token, selection == requested else { return }
+            samplerFiles = files
         }
     }
 
-    private func nativeSamplers(in name: String) -> [Sampler] {
-        samplers(in: Self.nativeSampleRoot?.appendingPathComponent(name, isDirectory: true))
-            .filter { VinhetasPad.accepts($0.url) }
-    }
-
-    private func samplers(in directory: URL?) -> [Sampler] {
+    nonisolated private static func samplers(in directory: URL?) -> [Sampler] {
         guard let directory,
               let files = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isRegularFileKey],
                                                                        options: [.skipsHiddenFiles]) else { return [] }
@@ -1307,7 +2133,8 @@ struct WorkspaceLibrary: View {
     }
 
     private var samplerList: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let favorites = favoriteKeys
+        return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 5) {
                 ControlIcon(name: "speaker.wave.2", size: 14)
                 Slider(value: $samplerPreviewDB, in: -60...0, step: 1)
@@ -1337,7 +2164,7 @@ struct WorkspaceLibrary: View {
                                     data: { Data(sampler.url.absoluteString.utf8) },
                                     provider: { LibrarySamplerTransfer.provider(sampler.url) },
                                     click: { togglePreview(sampler.url) }))
-                            favoriteButton(favoriteKeys.contains(sampler.favoriteKey)) { toggleFavorite(sampler.favoriteKey) }
+                            favoriteButton(favorites.contains(sampler.favoriteKey)) { toggleFavorite(sampler.favoriteKey) }
                                 .padding(.trailing, 6)
                         }
                         .frame(height: 27)
@@ -1383,7 +2210,7 @@ struct WorkspaceLibrary: View {
         }
     }
 
-    @discardableResult nonisolated static func copySampler(_ source: URL, into directory: URL, reuseIdentical: Bool = false) throws -> URL {
+    @discardableResult nonisolated static func copySampler(_ source: URL, into directory: URL, forPad: Bool = false) throws -> URL {
         let accessed = source.startAccessingSecurityScopedResource()
         defer { if accessed { source.stopAccessingSecurityScopedResource() } }
         let manager = FileManager.default
@@ -1392,8 +2219,10 @@ struct WorkspaceLibrary: View {
         defer { try? manager.removeItem(at: temporary) }
         try manager.copyItem(at: source, to: temporary)
         let audio = try AVAudioFile(forReading: temporary)
-        guard VinhetasPad.acceptsDuration(frames: audio.length, sampleRate: audio.fileFormat.sampleRate) else {
-            throw ProjectError.invalid(JarasLocalization.string("Samplers must be between 0 and 60 seconds."))
+        let rate = audio.fileFormat.sampleRate
+        guard audio.length > 0, rate.isFinite, rate > 0 else { throw CocoaError(.fileReadCorruptFile) }
+        if forPad, !VinhetasPad.acceptsDuration(frames: audio.length, sampleRate: rate) {
+            throw ProjectError.invalid(JarasLocalization.string("Pads accept audio up to 60 seconds."))
         }
         let base = source.deletingPathExtension().lastPathComponent
         var target = directory.appendingPathComponent(source.lastPathComponent)
@@ -1403,7 +2232,7 @@ struct WorkspaceLibrary: View {
                 try manager.moveItem(at: temporary, to: target)
                 return target
             } catch let error as CocoaError where error.code == .fileWriteFileExists {
-                if reuseIdentical && manager.contentsEqual(atPath: temporary.path, andPath: target.path) { return target }
+                if forPad && manager.contentsEqual(atPath: temporary.path, andPath: target.path) { return target }
             }
             target = directory.appendingPathComponent("\(base) \(copyNumber)").appendingPathExtension(source.pathExtension)
             copyNumber += 1
@@ -1422,16 +2251,20 @@ struct WorkspaceLibrary: View {
         previewPreparation = Task { @MainActor in
             defer { if preview?.id == id { previewPreparation = nil } }
             do {
-                let buffer: AVAudioPCMBuffer
+                let finished: @MainActor () -> Void = {
+                    if preview?.id == id { preview = nil }
+                }
                 if let instrumentID {
                     let drums = InstrumentLibrary.category(instrumentID) == .drum
-                    buffer = try await LibrarySoundFontPreviewRenderer.shared.render(url, drums: drums)
+                    let buffer = try await LibrarySoundFontPreviewRenderer.shared.render(url, drums: drums)
+                    guard !Task.isCancelled, preview?.id == id else { return }
+                    try playback.playLibrarySampler(id, buffer: buffer, gain: 1, finished: finished)
                 } else {
-                    buffer = try await Task.detached(priority: .userInitiated) { try Self.decodeSampler(url) }.value
-                }
-                guard !Task.isCancelled, preview?.id == id else { return }
-                try playback.playLibrarySampler(id, buffer: buffer, gain: instrumentID == nil ? samplerPreviewGain : 1) {
-                    if preview?.id == id { preview = nil }
+                    let prepared = try await Task.detached(priority: .userInitiated) {
+                        try StemAudioPlayback.PreparedLibrarySampler.open(url)
+                    }.value
+                    guard !Task.isCancelled, preview?.id == id else { return }
+                    try playback.playLibrarySampler(id, prepared: prepared, gain: samplerPreviewGain, finished: finished)
                 }
             } catch {
                 if preview?.id == id {
@@ -1463,18 +2296,7 @@ struct WorkspaceLibrary: View {
         projectAudio.stopPad(id)
     }
 
-    nonisolated private static func decodeSampler(_ url: URL) throws -> AVAudioPCMBuffer {
-        let file = try AVAudioFile(forReading: url)
-        let format = file.processingFormat
-        guard VinhetasPad.acceptsDuration(frames: file.length, sampleRate: format.sampleRate) else {
-            throw ProjectError.invalid(JarasLocalization.string("Samplers must be between 0 and 60 seconds."))
-        }
-        let frames = min(Double(file.length), (format.sampleRate * 3).rounded(.down))
-        guard frames >= 1, frames <= Double(UInt32.max) else {
-            throw CocoaError(.fileReadCorruptFile)
-        }
-        return try PadAudioBuffer.read(file, frames: AVAudioFrameCount(frames))
-    }
+
 }
 
 @MainActor enum LibraryEffectInsertion {
@@ -1561,7 +2383,7 @@ struct WorkspaceLibrary: View {
 
 
 @MainActor private struct LibraryTimelineList: View {
-    private struct Entry: Identifiable {
+    private struct Entry: Identifiable, Equatable {
         let id: UUID
         let name: String
         let label: String
@@ -1570,84 +2392,180 @@ struct WorkspaceLibrary: View {
 
     let show: ShowController
     let regions: Bool
-    let matches: (String) -> Bool
-    @ObservedObject private var presentation: ShowProjectPresentation
-    @State private var selected: UUID?
+    let docked: Bool
+    @State private var keyboardTarget = LibraryKeyboardTarget()
+    #if os(macOS)
+    @State private var scrollController = SidebarScrollController()
+    #endif
+    @State private var searchText = ""
+    @FocusState private var searchFocused: Bool
+    @ObservedObject private var selection: LibraryTimelineSelection
+    @State private var entries: [Entry] = []
+    @State private var songID: UUID?
     @State private var editing: UUID?
     @State private var draft = ""
     @State private var original = ""
 
-    init(show: ShowController, regions: Bool, matches: @escaping (String) -> Bool) {
-        self.show = show; self.regions = regions; self.matches = matches
-        presentation = show.projectPresentation
+    init(show: ShowController, regions: Bool, docked: Bool) {
+        self.show = show; self.regions = regions; self.docked = docked
+        selection = show.libraryTimelineSelection
     }
 
-    private var entries: [Entry] {
-        guard let song = show.current else { return [] }
+    private var selected: UUID? { selection.state.selected(in: songID, region: regions) }
+
+    private func refreshEntries() {
+        let song = show.current
+        if songID != song?.id {
+            songID = song?.id; editing = nil
+        }
+        guard let song else { entries = []; return }
         let values: [Entry]
         if regions {
             values = song.parts.map { Entry(id: $0.id, name: $0.name, label: $0.displayName, position: $0.startTime) }
         } else {
-            values = (song.markers ?? []).filter {
-                !$0.isTempo && !$0.isSection && $0.unifiedRegionID == nil && $0.sourceRegionID == nil
-            }.map { Entry(id: $0.id, name: $0.name, label: $0.name, position: $0.position) }
+            values = (song.markers ?? []).filter(\.isNavigationMarker).map { marker in
+                let source = marker.sourceRegionID.flatMap { id in song.parts.first { $0.id == id } }
+                return Entry(id: marker.id, name: source?.name ?? marker.name,
+                             label: source?.displayName ?? marker.name, position: marker.position)
+            }
         }
-        return values.filter { matches($0.label) || $0.id == editing }.sorted { $0.position < $1.position }
+        let sorted = values.sorted { $0.position < $1.position }
+        if sorted != entries { entries = sorted }
+        if let editing, !entries.contains(where: { $0.id == editing }) { self.editing = nil }
     }
 
     var body: some View {
-        let rows = entries
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rows = query.isEmpty ? entries : entries.filter { $0.label.localizedStandardContains(query) || $0.id == editing }
+        VStack(spacing: 0) {
+            TextField("Search", text: $searchText)
+                .textFieldStyle(.plain).font(.jarasSystem(size: 12))
+                .padding(.horizontal, 7).frame(height: 24)
+                .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 4))
+                .padding(.horizontal, 6).padding(.vertical, 4)
+                .focused($searchFocused)
+                .accessibilityIdentifier("library-timeline-search")
+            timelineRows(rows)
+        }
+        .background {
+            LibraryKeyboardArea(capturesTab: true, preferredTab: docked, keyboardTarget: keyboardTarget,
+                                arrowReleased: { show.finishLibraryTimelineNavigation(region: regions) }) { code in
+                switch code {
+                case 48: searchFocused = true; return true
+                case 125, 126: return step(code == 125 ? 1 : -1, in: rows)
+                default: return false
+                }
+            }
+        }
+        .onAppear(perform: refreshEntries)
+        .onReceive(show.projectPresentation.objectWillChange) { refreshEntries() }
+        .onChange(of: regions) { _ in editing = nil; refreshEntries() }
+        .onReceive(selection.$state) { state in
+            if let editing, let selected = state.selected(in: songID, region: regions), selected != editing {
+                finish(editing)
+            }
+        }
+    }
+
+    private static let rowHeight: CGFloat = 25
+    private static let rowSpacing: CGFloat = 2
+    private static let rowPadding: CGFloat = 6
+
+    private func timelineRows(_ rows: [Entry]) -> some View {
         ScrollViewReader { scroll in
             ScrollView {
-                LazyVStack(spacing: 2) {
+                LazyVStack(spacing: Self.rowSpacing) {
                     ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                         Group {
                             if editing == row.id {
-                                nameInput(for: row, index: index, rows: rows)
+                                nameInput(for: row, rows: rows)
                             } else {
-                                rowLabel(row)
+                                RowLabel(entry: row, controller: ObjectIdentifier(show), selected: selected == row.id,
+                                    select: { select(row) }, rename: { begin(row) }).equatable()
                             }
                         }
-                        .frame(height: 25)
+                        .frame(height: Self.rowHeight)
                         .background(selected == row.id ? JarasTheme.green.opacity(0.24) : Color.white.opacity(index.isMultiple(of: 2) ? 0.045 : 0),
                                     in: RoundedRectangle(cornerRadius: 4))
                         .id(row.id)
                     }
-                }.padding(6)
+                }.padding(Self.rowPadding)
+                #if os(macOS)
+                .background(SidebarScrollProbe(controller: scrollController))
+                #endif
             }
-            .onChange(of: editing) { id in
-                if let id { scroll.scrollTo(id) }
+            .onChange(of: editing ?? selected) { id in
+                guard let id, let index = rows.firstIndex(where: { $0.id == id }) else { return }
+                #if os(macOS)
+                // ScrollViewReader forces the lazy list to resolve the target
+                // even when it is already on screen. Only reveal clipped rows.
+                let top = Self.rowPadding + CGFloat(index) * (Self.rowHeight + Self.rowSpacing)
+                let viewport = scrollController.metrics
+                if viewport.viewportHeight > 0, top >= viewport.offset - 0.5,
+                   top + Self.rowHeight <= viewport.offset + viewport.viewportHeight + 0.5 { return }
+                #endif
+                scroll.scrollTo(id)
             }
-        }
-        .onChange(of: show.current?.id) { _ in editing = nil; selected = nil }
-        .onChange(of: regions) { _ in editing = nil; selected = nil }
-        .onChange(of: rows.map(\.id)) { ids in
-            if let editing, !ids.contains(editing) { self.editing = nil }
         }
     }
 
-    private func rowLabel(_ row: Entry) -> some View {
-        let label = Text(verbatim: row.label).font(.jarasSystem(size: 12))
-            .lineLimit(1).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-            .padding(.horizontal, 6).contentShape(Rectangle())
-        return Group {
-            #if os(macOS)
-            label.onTapGesture { select(row) }
-                .immediateRightClick { DispatchQueue.main.async { begin(row) } }
-            #else
-            label.overlay { IpadTapHoldTouchSurface(tap: { select(row) }, hold: { begin(row) }) }
-            #endif
+    private func step(_ direction: Int, in rows: [Entry]) -> Bool {
+        guard !rows.isEmpty else { return true }
+        let index = rows.firstIndex { $0.id == (editing ?? selected) }
+        let nextIndex = index.map { $0 + direction } ?? (direction > 0 ? 0 : rows.count - 1)
+        guard rows.indices.contains(nextIndex) else { return true }
+        let next = rows[nextIndex]
+        if let editing {
+            commitDraft(editing)
+            original = next.name; draft = next.name; self.editing = next.id
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(verbatim: row.label))
-        .accessibilityAddTraits(selected == row.id ? [.isButton, .isSelected] : .isButton)
-        .accessibilityAction { select(row) }
-        .accessibilityAction(named: Text("Rename")) { begin(row) }
+        show.browseLibraryTimelineEntry(next.id, region: regions, commitAfterDelay: !keyboardTarget.holdingArrow)
+        return true
+    }
+
+    private struct RowLabel: View, Equatable {
+        let entry: Entry
+        let controller: ObjectIdentifier
+        let selected: Bool
+        let select: () -> Void
+        let rename: () -> Void
+
+        nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.entry == rhs.entry && lhs.controller == rhs.controller && lhs.selected == rhs.selected
+        }
+
+        var body: some View {
+            let label = Text(verbatim: entry.label).font(.jarasSystem(size: 12))
+                .lineLimit(1).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                .padding(.horizontal, 6).contentShape(Rectangle())
+            return Group {
+                #if os(macOS)
+                label.onTapGesture(perform: select)
+                    .immediateRightClick { DispatchQueue.main.async { rename() } }
+                #else
+                label.overlay { IpadTapHoldTouchSurface(tap: select, hold: rename) }
+                #endif
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text(verbatim: entry.label))
+            .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+            .accessibilityAction { select() }
+            .accessibilityAction(named: Text("Rename")) { rename() }
+        }
     }
 
     private func select(_ row: Entry) {
-        guard show.selectLibraryTimelineEntry(row.id, region: regions) else { return }
-        selected = row.id
+        if let editing {
+            guard editing != row.id else { return }
+            finish(editing)
+        }
+        LibraryKeyboardTarget.active = keyboardTarget
+        #if os(macOS)
+        keyboardTarget.focus()
+        #else
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        #endif
+        show.selectLibraryTimelineEntry(row.id, region: regions, includesUnified: true)
     }
 
     private func begin(_ row: Entry) {
@@ -1659,18 +2577,20 @@ struct WorkspaceLibrary: View {
     private func finish(_ id: UUID, save: Bool = true) {
         guard editing == id else { return }
         editing = nil
-        if save, draft != original { show.renameTimelineLabel(id, name: draft, region: regions) }
+        if save { commitDraft(id) }
     }
 
-    private func nameInput(for row: Entry, index: Int, rows: [Entry]) -> some View {
+    private func commitDraft(_ id: UUID) {
+        if draft != original { show.renameTimelineLabel(id, name: draft, region: regions, includesUnified: true) }
+    }
+
+    private func nameInput(for row: Entry, rows: [Entry]) -> some View {
         let move: (Int) -> Void = { direction in
-            guard editing == row.id, rows.indices.contains(index + direction) else { return }
-            let next = rows[index + direction]
-            finish(row.id)
-            begin(next)
+            guard editing == row.id else { return }
+            _ = step(direction, in: rows)
         }
         #if os(macOS)
-        return LibraryTimelineNameInput(text: $draft, finish: { finish(row.id, save: $0) }, move: move)
+        return LibraryTimelineNameInput(text: $draft, keyboardTarget: keyboardTarget, finish: { finish(row.id, save: $0) }, move: move)
         #else
         return InlineNameInput(text: $draft, compact: false, finish: { finish(row.id) }, move: move,
                         accessibilityName: regions ? "Region name" : "Marker name")
@@ -1678,9 +2598,284 @@ struct WorkspaceLibrary: View {
     }
 }
 
-#if os(macOS)
+private actor LibraryMIDIStorage {
+    static let shared = LibraryMIDIStorage()
+
+    private func directory(_ id: UUID) throws -> URL {
+        try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                    appropriateFor: nil, create: true)
+            .appendingPathComponent("JarasLive/MIDI", isDirectory: true)
+            .appendingPathComponent(id.uuidString, isDirectory: true)
+    }
+
+    nonisolated static func read(_ url: URL, checkExtension: Bool = true) throws -> Data {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        guard url.isFileURL, !checkExtension || ["mid", "midi"].contains(url.pathExtension.lowercased()),
+              let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize, (1...64 * 1024 * 1024).contains(size) else {
+            throw ProjectError.invalid("Invalid MIDI file.")
+        }
+        return try Data(contentsOf: url)
+    }
+
+    func files(in id: UUID) -> [URL] {
+        guard let directory = try? directory(id),
+              let files = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil, options: .skipsHiddenFiles) else { return [] }
+        return files.filter { ["mid", "midi"].contains($0.pathExtension.lowercased()) }
+            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+    }
+
+    func saveFile(_ data: Data, named name: String, into id: UUID) throws {
+        _ = try StandardMIDIFileImport.read(data)
+        try save(data, named: name, into: id)
+    }
+
+    func copy(_ urls: [URL], into id: UUID) -> [String] {
+        urls.compactMap { url in
+            do { try saveFile(Self.read(url), named: url.deletingPathExtension().lastPathComponent, into: id); return nil }
+            catch { return "\(url.lastPathComponent) — \(error.localizedDescription)" }
+        }
+    }
+
+    func export(_ clips: [AudioClip], into id: UUID) -> [String] {
+        clips.compactMap { clip in
+            do { try save(MIDIItemExport.data(for: clip), named: clip.name, into: id); return nil }
+            catch { return "\(clip.name) — \(error.localizedDescription)" }
+        }
+    }
+
+    private func save(_ data: Data, named name: String, into id: UUID) throws {
+        let directory = try directory(id)
+        let manager = FileManager.default
+        try manager.createDirectory(at: directory, withIntermediateDirectories: true)
+        let stem = String(name.components(separatedBy: CharacterSet(charactersIn: "/:").union(.controlCharacters))
+            .joined(separator: "-").trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "."))).prefix(60))
+        let base = stem.isEmpty ? "MIDI" : stem
+        var version = 1
+        while true {
+            let filename = version == 1 ? base : "\(base) (\(version))"
+            let url = directory.appendingPathComponent(filename).appendingPathExtension("mid")
+            if !manager.fileExists(atPath: url.path) { try data.write(to: url, options: .atomic); return }
+            version += 1
+        }
+    }
+}
+
+@MainActor final class LibraryKeyboardTarget {
+    static let registered = NSHashTable<LibraryKeyboardTarget>.weakObjects()
+    static weak var active: LibraryKeyboardTarget?
+    var acceptsPointer: (CGPoint) -> Bool = { _ in false }
+    var isVisible: () -> Bool = { false }
+    var capturesTab = false
+    var preferredTab = false
+    var handle: (Int) -> Bool = { _ in false }
+    var holdingArrow = false
+    var arrowReleased: (() -> Void)?
+    #if os(macOS)
+    var focus: () -> Void = {}
+    #else
+    private static weak var hardwareArrowTarget: LibraryKeyboardTarget?
+    private static var hardwareArrowKey: Int?
+
+    static func handleHardwareArrow(_ event: HardwareKeyboardEvent) -> Bool {
+        let code = Int(event.keyCode)
+        if event.phase == .up {
+            guard hardwareArrowKey == code else { return false }
+            finishHardwareArrow(commit: true)
+            return true
+        }
+        guard event.modifiers.isEmpty, code == 125 || code == 126,
+              let target = active, target.isVisible(), target.arrowReleased != nil else { return false }
+        if !event.isRepeat {
+            finishHardwareArrow(commit: false)
+            hardwareArrowTarget = target
+            hardwareArrowKey = code
+            target.holdingArrow = true
+        }
+        guard hardwareArrowKey == code, hardwareArrowTarget === target else { return true }
+        return target.handle(code)
+    }
+
+    static func finishHardwareArrow(commit: Bool) {
+        let target = hardwareArrowTarget
+        hardwareArrowTarget = nil
+        hardwareArrowKey = nil
+        target?.holdingArrow = false
+        if commit, target?.isVisible() == true { target?.arrowReleased?() }
+    }
+    #endif
+
+    init() { Self.registered.add(self) }
+
+    static func pointer(at point: CGPoint) {
+        #if os(iOS)
+        finishHardwareArrow(commit: false)
+        #endif
+        active = registered.allObjects.first { $0.isVisible() && $0.acceptsPointer(point) }
+    }
+
+    static func dispatch(_ code: Int) -> Bool {
+        if code == 48 {
+            let visible = registered.allObjects.filter { $0.capturesTab && $0.isVisible() }
+            return (visible.first { $0.preferredTab } ?? visible.first)?.handle(code) ?? false
+        }
+        guard let active, active.isVisible() else { return false }
+        return active.handle(code)
+    }
+}
+
+#if os(iOS)
+private struct LibraryKeyboardArea: UIViewRepresentable {
+    var capturesTab = false
+    var preferredTab = false
+    var keyboardTarget: LibraryKeyboardTarget? = nil
+    var arrowReleased: (() -> Void)? = nil
+    let action: (Int) -> Bool
+
+    final class InputView: UIView {
+        let target = LibraryKeyboardTarget()
+        override func point(inside point: CGPoint, with event: UIEvent?) -> Bool { false }
+    }
+    func makeUIView(context: Context) -> InputView { InputView() }
+    func updateUIView(_ view: InputView, context: Context) {
+        let target = keyboardTarget ?? view.target
+        target.handle = action
+        target.arrowReleased = arrowReleased
+        target.capturesTab = capturesTab; target.preferredTab = preferredTab
+        target.isVisible = { [weak view] in
+            guard let view else { return false }
+            return view.window?.isKeyWindow == true && !view.isHidden && !view.bounds.isEmpty
+        }
+        target.acceptsPointer = { [weak view] point in
+            guard let view, let window = view.window else { return false }
+            return view.bounds.contains(view.convert(point, from: window))
+        }
+    }
+}
+#else
+struct LibraryKeyboardArea: NSViewRepresentable {
+    var capturesTab = false
+    var preferredTab = false
+    var keyboardTarget: LibraryKeyboardTarget? = nil
+    var arrowReleased: (() -> Void)? = nil
+    let action: (Int) -> Bool
+
+    final class InputView: NSView {
+        let target = LibraryKeyboardTarget()
+        var commandTarget: LibraryKeyboardTarget?
+        static var monitor: Any?
+        static weak var arrowTarget: LibraryKeyboardTarget?
+        static weak var arrowWindow: NSWindow?
+        static var arrowKey: UInt16?
+        static var arrowTimer: Timer?
+
+        static func stopArrow(commit: Bool) {
+            let target = arrowTarget
+            arrowTimer?.invalidate()
+            arrowTimer = nil; arrowKey = nil; arrowTarget = nil; arrowWindow = nil
+            target?.holdingArrow = false
+            if commit, target?.isVisible() == true { target?.arrowReleased?() }
+        }
+
+        static func beginArrow(_ event: NSEvent, target: LibraryKeyboardTarget) -> Bool {
+            let code = event.keyCode
+            guard target.arrowReleased != nil, code == 125 || code == 126 else { return target.handle(Int(code)) }
+            if event.isARepeat || arrowKey == code { return true }
+            stopArrow(commit: false)
+            arrowTarget = target; arrowWindow = event.window; arrowKey = code
+            target.holdingArrow = true
+            guard target.handle(Int(code)) else { stopArrow(commit: false); return false }
+            let timer = Timer(fire: Date(timeIntervalSinceNow: 0.20), interval: 0.055, repeats: true) { [weak target] _ in
+                MainActor.assumeIsolated {
+                    guard let target, target.isVisible(), arrowWindow?.attachedSheet == nil,
+                          NSApp.modalWindow == nil, target.handle(Int(code)) else {
+                        stopArrow(commit: false)
+                        return
+                    }
+                }
+            }
+            timer.tolerance = 0.004
+            arrowTimer = timer
+            RunLoop.main.add(timer, forMode: .common)
+            return true
+        }
+
+        override var acceptsFirstResponder: Bool { true }
+        override func keyDown(with event: NSEvent) {
+            if !LibraryKeyboardArea.handle(event) { super.keyDown(with: event) }
+        }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard window != nil, Self.monitor == nil else { return }
+            Self.monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown, .keyUp, .flagsChanged]) { event in
+                switch event.type {
+                case .keyUp:
+                    guard event.keyCode == Self.arrowKey else { return event }
+                    Self.stopArrow(commit: event.window != nil && event.window === Self.arrowWindow && event.window?.isKeyWindow == true)
+                    return nil
+                case .flagsChanged:
+                    if !event.modifierFlags.intersection([.command, .option, .shift, .control]).isEmpty {
+                        Self.stopArrow(commit: false)
+                    }
+                    return event
+                case .leftMouseDown, .rightMouseDown:
+                    Self.stopArrow(commit: false)
+                    LibraryKeyboardTarget.pointer(at: event.locationInWindow)
+                    if let window = event.window, let previous = window.firstResponder as? InputView,
+                       previous.commandTarget !== LibraryKeyboardTarget.active {
+                        window.makeFirstResponder(nil)
+                    }
+                    return event
+                case .keyDown:
+                    return LibraryKeyboardArea.handle(event) ? nil : event
+                default:
+                    return event
+                }
+            }
+        }
+    }
+    static func handle(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown, let window = event.window, window.isKeyWindow,
+              window.attachedSheet == nil, window.sheetParent == nil, NSApp.modalWindow == nil,
+              ControlMappings.shared.editing == nil, !NativeTimelineInputGate.shared.isBlocked(window),
+              !(window.firstResponder is NSTextField), !(window.firstResponder is NSTextView) else { return false }
+        let flags = event.modifierFlags.intersection([.command, .option, .shift, .control])
+        if flags.isEmpty, event.keyCode == 48 { return LibraryKeyboardTarget.dispatch(48) }
+        if flags.isEmpty, event.keyCode == 125 || event.keyCode == 126 {
+            let target = (window.firstResponder as? InputView)?.commandTarget ?? LibraryKeyboardTarget.active
+            guard let target, target.isVisible() else { return false }
+            return InputView.beginArrow(event, target: target)
+        }
+        if (flags == .command || flags == .control), event.keyCode == 9 {
+            return LibraryKeyboardTarget.dispatch(9)
+        }
+        return false
+    }
+    func makeNSView(context: Context) -> InputView { InputView() }
+    func updateNSView(_ view: InputView, context: Context) {
+        let target = keyboardTarget ?? view.target
+        view.commandTarget = target
+        target.handle = action
+        target.arrowReleased = arrowReleased
+        target.focus = { [weak view] in
+            if let view { view.window?.makeFirstResponder(view) }
+        }
+        target.capturesTab = capturesTab; target.preferredTab = preferredTab
+        target.isVisible = { [weak view] in
+            guard let view else { return false }
+            return view.window?.isKeyWindow == true && !view.isHiddenOrHasHiddenAncestor && !view.visibleRect.isEmpty
+        }
+        target.acceptsPointer = { [weak view] point in
+            guard let view else { return false }
+            return view.visibleRect.contains(view.convert(point, from: nil))
+        }
+    }
+}
+
 private struct LibraryTimelineNameInput: NSViewRepresentable {
     @Binding var text: String
+    let keyboardTarget: LibraryKeyboardTarget
     let finish: (Bool) -> Void
     let move: (Int) -> Void
 
@@ -1716,10 +2911,21 @@ private struct LibraryTimelineNameInput: NSViewRepresentable {
             switch command {
             case #selector(NSResponder.insertNewline(_:)): input?.finish(true)
             case #selector(NSResponder.cancelOperation(_:)): input?.finish(false)
-            case #selector(NSResponder.moveUp(_:)): input?.move(-1)
-            case #selector(NSResponder.moveDown(_:)): input?.move(1)
+            case #selector(NSResponder.moveUp(_:)): return move(-1)
+            case #selector(NSResponder.moveDown(_:)): return move(1)
             default: return false
             }
+            return true
+        }
+
+        private func move(_ direction: Int) -> Bool {
+            guard let input else { return false }
+            if let event = NSApp.currentEvent, event.type == .keyDown,
+               event.window === window, event.keyCode == (direction < 0 ? 126 : 125),
+               event.modifierFlags.intersection([.command, .option, .shift, .control]).isEmpty {
+                return LibraryKeyboardArea.InputView.beginArrow(event, target: input.keyboardTarget)
+            }
+            input.move(direction)
             return true
         }
     }

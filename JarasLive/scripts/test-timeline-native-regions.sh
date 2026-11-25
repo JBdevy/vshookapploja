@@ -13,6 +13,7 @@ import sys
 source = Path('Apple/Shared/TimelineGridView.swift').read_text()
 start = source.index('/// Region commands are structural;')
 end = source.index('@MainActor private struct NativeTimelineBaseStyle', start)
+bands = source[source.index('private let markerLaneHeight:'):source.index('struct TimelineBandsGlyph:')]
 probes = '''
 extension NativeTimelineRegionTargetsView {
     func viewForTest(_ id: UUID) -> RegionRightClickView? { mounted[id]?.view }
@@ -21,11 +22,12 @@ extension NativeTimelineRegionTargetsView {
     var orderForTest: [UUID] { mountedOrder }
 }
 '''
-Path(sys.argv[1], 'main.swift').write_text('import AppKit\nimport SwiftUI\n' + source[start:end] + probes +
+Path(sys.argv[1], 'main.swift').write_text('import AppKit\nimport SwiftUI\n' + bands + source[start:end] + probes +
     Path('Tests/Apple/TimelineNativeRegionTests.swift').read_text() +
     Path('Tests/Apple/TimelineNativeRegionClippingTests.swift').read_text())
 # Expose geometry and count cursor invalidations only in this extracted fixture.
 editor = Path('Apple/Shared/RegionEditor.swift').read_text()
+editor = 'import SwiftUI\n' + editor[editor.index('struct RegionEditor: View'):]
 environment = Path('Apple/Shared/FXWindows.swift').read_text()
 first = environment.index('private struct WorkspaceEditorDismissKey: EnvironmentKey')
 editor += '\n' + environment[first:environment.index('extension View {', first)]

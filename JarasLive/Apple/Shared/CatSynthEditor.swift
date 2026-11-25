@@ -1,10 +1,10 @@
 import SwiftUI
 import Combine
-import UniformTypeIdentifiers
 #if os(macOS)
 import AppKit
 #else
 import UIKit
+import UniformTypeIdentifiers
 #endif
 
 struct CatSynthEditor: View {
@@ -28,7 +28,11 @@ struct CatSynthEditor: View {
     @State private var hoveredPreset: Int?
     @State private var openSelector: Int?
     @FocusState private var nameFocused: Bool
+    #if os(macOS)
+    private static let presetStripSpace = "catsynth-preset-strip"
+    #else
     private static let presetDragType = UTType(exportedAs: "app.catlive.catsynth-preset")
+    #endif
 
     private let refresh = Timer.publish(every: 1.0 / 24, on: .main, in: .common).autoconnect()
 
@@ -158,32 +162,42 @@ struct CatSynthEditor: View {
                 Toggle("Enabled", isOn: $enabled).toggleStyle(.switch).labelsHidden()
                     .tint(accent).accessibilityLabel("Enabled")
             }
-            HStack(spacing: 6) {
-                ForEach(0..<CatSynthBank.count, id: \.self) { index in
-                    Button {
-                        completePresetName()
-                        bank.selected = index
-                    } label: {
-                        Text(verbatim: String(format: "%02d", index + 1))
-                            .font(.jarasSystem(size: 12, weight: .bold, design: .monospaced))
-                            .foregroundStyle(selected == index ? Color(hex: 0x140522) : accent)
-                            .frame(maxWidth: .infinity, minHeight: 29)
-                            .background(selected == index ? accent : Color(hex: 0x211335), in: RoundedRectangle(cornerRadius: 5))
-                            .overlay { RoundedRectangle(cornerRadius: 5).strokeBorder(accent.opacity(hoveredPreset == index ? 1 : 0.35), lineWidth: hoveredPreset == index ? 2 : 1) }
-                    }.buttonStyle(.plain).accessibilityLabel(Text(verbatim: presetName(index)))
-                        .accessibilityAddTraits(selected == index ? .isSelected : [])
-                        .onDrag { dragPreset(index) }
-                        .onDrop(of: [Self.presetDragType], isTargeted: Binding(
-                            get: { hoveredPreset == index },
-                            set: { active in
-                                if active { hoveredPreset = index }
-                                else if hoveredPreset == index { hoveredPreset = nil }
-                            }
-                        )) { providers in
-                            dropPreset(providers, on: index)
-                        }
+            GeometryReader { geometry in
+                let gap: CGFloat = 6
+                let width = max(0, (geometry.size.width - gap * CGFloat(CatSynthBank.count - 1)) / CGFloat(CatSynthBank.count))
+                HStack(spacing: gap) {
+                    ForEach(0..<CatSynthBank.count, id: \.self) { index in
+                        let button = Button {
+                            completePresetName()
+                            bank.selected = index
+                        } label: {
+                            Text(verbatim: String(format: "%02d", index + 1))
+                                .font(.jarasSystem(size: 12, weight: .bold, design: .monospaced))
+                                .foregroundStyle(selected == index ? Color(hex: 0x140522) : accent)
+                                .frame(width: width, height: 29)
+                                .background(selected == index ? accent : Color(hex: 0x211335), in: RoundedRectangle(cornerRadius: 5))
+                                .overlay { RoundedRectangle(cornerRadius: 5).strokeBorder(accent.opacity(hoveredPreset == index ? 1 : 0.35), lineWidth: hoveredPreset == index ? 2 : 1) }
+                                .contentShape(Rectangle())
+                        }.buttonStyle(.plain).accessibilityLabel(Text(verbatim: presetName(index)))
+                            .accessibilityAddTraits(selected == index ? .isSelected : [])
+                        #if os(macOS)
+                        button.simultaneousGesture(presetDrag(from: index, width: width, gap: gap))
+                        #else
+                        button.onDrag { dragPreset(index) }
+                            .onDrop(of: [Self.presetDragType], isTargeted: Binding(
+                                get: { hoveredPreset == index },
+                                set: { active in
+                                    if active { hoveredPreset = index }
+                                    else if hoveredPreset == index { hoveredPreset = nil }
+                                }
+                            )) { providers in dropPreset(providers, on: index) }
+                        #endif
+                    }
                 }
-            }
+                #if os(macOS)
+                .coordinateSpace(name: Self.presetStripSpace)
+                #endif
+            }.frame(height: 29)
         }.padding(9).background(Color(hex: 0x120a20), in: RoundedRectangle(cornerRadius: 8))
     }
 
@@ -199,16 +213,46 @@ struct CatSynthEditor: View {
         if update.names != bank.names { bank = update }
     }
 
+    private func copyPreset(_ values: [Float], name: String, to index: Int) {
+        var update = bank
+        update.slots[index] = values
+        var names = update.names ?? Array(repeating: nil, count: CatSynthBank.count)
+        names[index] = name == Self.names[index] ? nil : name
+        update.names = names.contains(where: { $0 != nil }) ? names : nil
+        bank = update
+    }
+
+    #if os(macOS)
+    private func presetDrag(from source: Int, width: CGFloat, gap: CGFloat) -> some Gesture {
+        func target(at point: CGPoint) -> Int? {
+            guard point.x >= 0, point.y >= 0, point.y < 29 else { return nil }
+            let index = Int(point.x / (width + gap))
+            guard index < CatSynthBank.count, index != source,
+                  point.x - CGFloat(index) * (width + gap) < width else { return nil }
+            return index
+        }
+        return DragGesture(minimumDistance: 5, coordinateSpace: .named(Self.presetStripSpace))
+            .onChanged { hoveredPreset = target(at: $0.location) }
+            .onEnded {
+                hoveredPreset = nil
+                guard let index = target(at: $0.location) else { return }
+                completePresetName()
+                copyPreset(patch(for: source), name: presetName(source), to: index)
+            }
+    }
+    #else
     private struct PresetDrag: Codable {
         let effect: String
         let track: UUID?
         let source: Int
         let values: [Float]
+        let name: String
     }
 
     private func dragPreset(_ index: Int) -> NSItemProvider {
+        completePresetName()
         let provider = NSItemProvider()
-        let preset = PresetDrag(effect: effect, track: track, source: index, values: patch(for: index))
+        let preset = PresetDrag(effect: effect, track: track, source: index, values: patch(for: index), name: presetName(index))
         guard let data = try? JSONEncoder().encode(preset) else { return provider }
         provider.registerDataRepresentation(forTypeIdentifier: Self.presetDragType.identifier, visibility: .ownProcess) { complete in
             complete(data, nil)
@@ -223,14 +267,11 @@ struct CatSynthEditor: View {
             guard let data, let preset = try? JSONDecoder().decode(PresetDrag.self, from: data),
                   preset.effect == effect, preset.track == track, preset.source != index,
                   preset.values.count == CatSynthBank.parameterCount, preset.values.allSatisfy(\.isFinite) else { return }
-            DispatchQueue.main.async {
-                var update = bank
-                update.slots[index] = preset.values
-                bank = update
-            }
+            DispatchQueue.main.async { self.copyPreset(preset.values, name: preset.name, to: index) }
         }
         return true
     }
+    #endif
 
     private func oscillator(_ index: Int) -> some View {
         let first = index * 4

@@ -662,8 +662,9 @@ for detached in [false, true] {
 print("FOOTER_NATIVE_FX_OUTPUT_DIVIDER_DOCKED_FLOATING_HEIGHTS_FIXED_DOCUMENTS_SCROLL_ACTIONS_ENVIRONMENT_WITHOUT_ROOT_REBUILDS_OK")
 
 private let stableChannelHost = FooterMixerHostingView(rootView: AnyView(
-    FooterMixerStripGeometry(iconHeight: 0, selected: true, slots: AnyView(Color.clear),
-        footer: { AnyView(Color.clear.frame(height: $0 + FooterMixerStripLayout.labelHeight)) }).padding(5)))
+    FooterMixerStripGeometry(iconHeight: 40, selected: true, footerStripe: .systemPurple, slots: AnyView(Color.clear),
+        footer: { AnyView(Color.clear.frame(height: $0 + FooterMixerStripLayout.labelHeight + 40)) }).padding(5)))
+stableChannelHost.usesChannelGeometry = true
 stableChannelHost.frame = NSRect(x: 0, y: 0, width: 93, height: 240)
 window.contentView!.addSubview(stableChannelHost); stableChannelHost.layoutSubtreeIfNeeded()
 private func findChannelGeometry(_ root: NSView) -> FooterMixerStripGeometryView? {
@@ -677,6 +678,10 @@ for height in 241...500 {
     precondition(stableChannelHost.frame.height == 724, "Channel decorations must keep a fixed SwiftUI size proposal")
     precondition(abs(stableGeometry.subviews[1].frame.maxY - CGFloat(height - 14)) < 0.01,
                  "Fixed outer decoration size must not displace the channel's lower controls")
+    let band = stableGeometry.layer!.sublayers!.first { $0.name == "track-color-footer" }!
+    precondition(!band.isHidden && band.frame.maxY == CGFloat(height - 10) &&
+                 band.frame.width == stableGeometry.bounds.width && band.frame.minX == 0,
+                 "The track color fills the width below the number at the actual visible height")
 }
 stableChannelHost.removeFromSuperview()
 print("FOOTER_CHANNEL_FIXED_HOST_PROPOSAL_AND_EXACT_NATIVE_VISIBLE_GEOMETRY_OK")
@@ -761,6 +766,7 @@ print("FOOTER_RETAINED_HIDDEN_UPDATES_DEFER_PREPARATION_UNTIL_REOPEN_WITHOUT_BLA
 // channel. Nonzero control frames alone are insufficient: they must intersect
 // the clipped viewport, rather than remain below it in the fixed 724pt host.
 private let replacement = FooterMixerScrollView(frame: CGRect(x: 0, y: 0, width: 600, height: 300))
+replacement.usesChannelGeometry = true
 let replacementWindow = NSWindow(contentRect: replacement.frame, styleMask: [.titled], backing: .buffered, defer: false)
 replacementWindow.isReleasedWhenClosed = false
 replacementWindow.contentView = replacement
@@ -776,10 +782,10 @@ func replaceChannelIdentities() {
         AnyView(HStack(spacing: 0) {
             HStack(spacing: 3) {
                 ForEach(Array(range), id: \.self) { index in
-                    FooterMixerStripGeometry(iconHeight: 0, selected: false,
+                    FooterMixerStripGeometry(iconHeight: 40, selected: false,
                         slots: AnyView(Color.gray), footer: { height in
                             AnyView(VStack { RevealControl().frame(height: 24); Spacer(minLength: 0) }
-                                .frame(height: height + FooterMixerStripLayout.labelHeight))
+                                .frame(height: height + FooterMixerStripLayout.labelHeight + 40))
                         }).frame(width: 83).frame(maxHeight: .infinity).id("\(identity)-\(index)")
                 }
             }

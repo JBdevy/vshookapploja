@@ -6,7 +6,6 @@ import AppKit
     static let shared = RightClickRouter()
     private let targets = NSHashTable<RightClickTargetView>.weakObjects()
     private var monitor: Any?
-    var interactionBlocked = false
     func add(_ target: RightClickTargetView) {
         targets.add(target)
         if monitor == nil {
@@ -21,8 +20,9 @@ import AppKit
     private func target(for event: NSEvent) -> RightClickTargetView? {
         let optionClick = event.type == .leftMouseDown && event.modifierFlags.contains(.option) && !event.modifierFlags.contains(.control)
         let shiftClick = event.type == .leftMouseDown && event.modifierFlags.contains(.shift) && !event.modifierFlags.contains(.control) && !optionClick
-        guard !interactionBlocked, event.type == .rightMouseDown || event.modifierFlags.contains(.control) || optionClick || shiftClick,
-              let window = event.window, window.attachedSheet == nil else { return nil }
+        guard event.type == .rightMouseDown || event.modifierFlags.contains(.control) || optionClick || shiftClick,
+              let window = event.window, window.attachedSheet == nil,
+              !NativeTimelineInputGate.shared.isBlocked(window) else { return nil }
         let pinned = window.contentView.flatMap {
             NativeTimelineOverlayInputRegistration.pinnedRoot(in: $0, point: event.locationInWindow)
         }

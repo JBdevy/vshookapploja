@@ -21,6 +21,31 @@ final class MIDIItemTests: XCTestCase {
         XCTAssertEqual(song.instrumentPlaybackNotes(in: clip, track: track).count, 3)
     }
 
+    func testArpeggioParameterChangesMIDIAndSyncUsesTheTempoMap() throws {
+        var song = Project.empty(name: "Arp").songs[0]
+        song.bpm = 120
+        song.markers = [TimelineMarker(id: UUID(), name: "Tempo", position: 0.5, color: 0, tempoBPM: 60)]
+        var track = Track(id: UUID(), name: "Keys", role: .keys)
+        let parameters = try JSONDecoder().decode(NativeArpeggiatorSettings.self,
+            from: Data(#"{"division":8,"direction":1,"octaves":2,"gate":50}"#.utf8))
+        var fx = NativeFXSettings()
+        fx.appendNative("Arpeggiator")
+        fx.arpeggiator = parameters
+        track.fx = fx
+        let notes = [67, 60, 64].map { MIDINote(start: 0, length: 4, pitch: $0) }
+        let clip = AudioClip(id: UUID(), name: "Chord", startTime: 0, duration: 1.5,
+                             midi: MIDIItem(notes: notes, sourceBPM: 120))
+        var rendered = song.instrumentPlaybackNotes(in: clip, track: track)
+        XCTAssertEqual(rendered.map(\.pitch), [79, 76, 72, 67])
+        XCTAssertEqual(rendered.map(\.start), [0, 0.25, 0.5, 1])
+        XCTAssertEqual(rendered[2].end - rendered[2].start, 0.25, accuracy: 1e-9)
+        track.fx?.arpeggiator?.sync = false
+        track.fx?.arpeggiator?.bpm = 120
+        rendered = song.instrumentPlaybackNotes(in: clip, track: track)
+        XCTAssertEqual(rendered.map(\.start), [0, 0.25, 0.5, 0.75, 1, 1.25])
+        XCTAssertEqual(rendered[2].end - rendered[2].start, 0.125, accuracy: 1e-9)
+    }
+
     func testEveryDivisionAndTimingMode() {
         for division in MIDIGrid.divisions {
             let straight=MIDIGrid(division:division)
@@ -254,8 +279,15 @@ extension MIDIItemTests {
         XCTAssertEqual(playback[2].end, 12, accuracy: 0.000001)
     }
     func testLoopRecordingPreservesPassesAndSustainedKeys() throws {
-        let cycle = try XCTUnwrap(RecordingCycle(4...6))
+        let cycle = try XCTUnwrap(RecordingCycle(loop: LoopState(enabled: true, start: 4, end: 6)))
+        XCTAssertNil(RecordingCycle(loop: LoopState(enabled: false, start: 4, end: 6)))
+        XCTAssertNil(RecordingCycle(loop: LoopState(enabled: true, start: 6, end: 4)))
         XCTAssertNil(RecordingCycle(4...4))
+        XCTAssertEqual(cycle.transportDeviation(from: 5.9, to: 4.05, advance: 0.15, wrapped: true), 0, accuracy: 1e-8)
+        XCTAssertEqual(cycle.transportDeviation(from: 5.9, to: 4.05, advance: 0.10, wrapped: true), 0.05, accuracy: 1e-8)
+        XCTAssertEqual(cycle.transportDeviation(from: 5.9, to: 4.05, advance: 0.15, wrapped: false), 2, accuracy: 1e-8)
+        XCTAssertEqual(cycle.transportDeviation(from: 4.1, to: 4.3, advance: 4.2, wrapped: true), 0, accuracy: 1e-8)
+        XCTAssertEqual(cycle.transportDeviation(from: 4.3, to: 5.6, advance: 0.1, wrapped: false), 1.2, accuracy: 1e-8)
         XCTAssertEqual(cycle.pass(start: 5, elapsed: 1).position, 4)
         XCTAssertEqual(cycle.pass(start: 5, elapsed: 3).index, 2)
         let captured = 5.125

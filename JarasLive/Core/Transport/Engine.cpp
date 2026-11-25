@@ -993,11 +993,12 @@ std::map<ID, int> Engine::setTrackMixerComponents(const ID& songID, const std::m
     std::vector<std::pair<Track*, int>> changes;
     for (auto& track : song->tracks) {
         const auto mask = masks.find(track.id);
-        if (mask == masks.end() || !track.supportsMixerComponents()) continue;
+        if (mask == masks.end()) continue;
         const int oldMask = track.hiddenMixerComponents.value_or(0);
-        if (oldMask == mask->second) continue;
+        const int newMask = track.supportsMixerComponents() ? mask->second : (oldMask & ~Track::vuBit) | (mask->second & Track::vuBit);
+        if (oldMask == newMask) continue;
         previous.emplace(track.id, oldMask);
-        changes.emplace_back(&track, mask->second);
+        changes.emplace_back(&track, newMask);
     }
     for (const auto& [track, mask] : changes) {
         track->hiddenMixerComponents = mask ? std::optional<int>(mask) : std::nullopt;
@@ -1386,6 +1387,8 @@ void Engine::execute(const Command& c) {
         for (auto& song : project_.songs) for (auto& track : song.tracks) for (auto& clip : track.clips)
             if (clip.id == c.target) {
                 if (!fixedTrackName(track.role).empty() && !(clip.audioFile && clip.audioFile->path.rfind("Videos/", 0) == 0)) throw std::invalid_argument("Special items cannot have fades");
+                if (clip.fadeIn.value_or(0) > 0 || clip.fadeOut.value_or(0) > 0 || c.value > 0)
+                    clip.fadeControlsEnabled = true;
                 auto& fade = c.kind == CommandKind::clipFadeIn ? clip.fadeIn : clip.fadeOut;
                 fade = c.value == 0 ? std::nullopt : std::optional<double>(std::min(clip.duration,c.value));
                 return;
@@ -2005,6 +2008,7 @@ void Engine::advanceContinuous(double elapsed, const TimelineMarker* sectionDest
             transport_.position += elapsed;
             if (transport_.position >= *transport_.loop.end) {
                 ++transport_.sectionJumpSerial;
+                ++transport_.repeatWrapSerial;
                 transport_.position = *transport_.loop.start + std::fmod(transport_.position - *transport_.loop.start, *transport_.loop.end - *transport_.loop.start);
             }
             syncRegion(); return;
@@ -2113,7 +2117,7 @@ void Engine::setTrackRouting(const std::vector<std::pair<ID,TrackRouting>>& rout
             Track* found = nullptr;
             for (auto& song : project_.songs) for (auto& track : song.tracks) if (track.id == value.first) found = &track;
             if (!found) throw std::invalid_argument("Unknown track");
-            previous.push_back({found,found->routing});found->routing=value.second;
+            previous.push_back({found,found->routing});found->routing=value.second;found->routing->removeUnusedSendGains();
         }
         for (const auto& song : project_.songs) validateRouting(song);
     } catch (...) {for (auto it=previous.rbegin();it!=previous.rend();++it)it->first->routing=it->second;throw;}
@@ -2239,7 +2243,10 @@ bool Engine::advanceMultiLoop(double elapsed, double secondaryAdvance) {
     if (next < state.start) return false;
     state.gates = true; state.amount = 1; transport_.loop.enabled = true;
     transport_.loop.start = state.start; transport_.loop.end = state.end;
-    if (next >= state.end) ++transport_.sectionJumpSerial;
+    if (next >= state.end) {
+        ++transport_.sectionJumpSerial;
+        ++transport_.repeatWrapSerial;
+    }
     transport_.position = next >= state.end ? state.start + std::fmod(next - state.start, state.end - state.start) : next;
     syncRegion();
     return true;

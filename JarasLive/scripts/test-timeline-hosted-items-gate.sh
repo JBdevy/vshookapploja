@@ -21,7 +21,10 @@ def declaration(source, needle):
     end = source.index('\n}', start) + 2
     return source[start:end] + '\n'
 
-parts = ['import AppKit\nimport SwiftUI\nimport Combine\n']
+parts = ['import AppKit\nimport SwiftUI\nimport Combine\nimport UniformTypeIdentifiers\n']
+parts.append('private final class MixerDividerView: NSView {}\n')
+parts.extend(declaration(scroll, name) for name in ['struct GridRowReveal:', 'enum TimelineVerticalBar {', 'private protocol TimelineSetlistResizeHost:'])
+parts.append(declaration(Path('Apple/Shared/VinhetasPanel.swift').read_text(), 'enum LibrarySamplerTransfer {'))
 parts.append('private enum TimelineViewportPreferences { static let zoom = 1.0 }\n')
 parts.extend(declaration(grid, needle) for needle in [
     'private final class TimelineCoordinatePlane:',

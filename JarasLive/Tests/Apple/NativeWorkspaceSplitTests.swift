@@ -21,6 +21,7 @@ private let editRequest = TrackDetailsEditRequest(project: UUID(), tracks: [UUID
     var commits: [CGFloat] = []
     var actions: [String] = []
     var rootEvaluations = 0
+    @Published var dockRevision = 0
     let scroll = SidebarScrollController()
     func toggle() {
         if width > 0 { restore = width; width = 0 } else { width = restore }
@@ -104,7 +105,9 @@ private struct WorkspaceFixture: View {
             Text("Transport").frame(height: 60)
             GeometryReader { geometry in
                 NativeWorkspaceSplit(width: state.width, restoreWidth: state.restore, minimum: 277,
-                    scrollController: state.scroll, sidebarLeading: state.sidebarLeading, sidebarDetached: state.sidebarDetached, contentIdentity: state.revision, onToggle: state.toggle, onEnd: { width in
+                    scrollController: state.scroll, sidebarLeading: state.sidebarLeading, sidebarDetached: state.sidebarDetached,
+                    contentIdentity: [state.revision, state.dockRevision], trailingContentIdentity: state.revision,
+                    onToggle: state.toggle, onEnd: { width in
                         state.width = width; state.restore = width; state.commits.append(width)
                     }) {
                     LeadingPane(revision: revision).foregroundStyle(.white)
@@ -166,6 +169,10 @@ MainActor.assumeIsolated {
                  "unrelated parent publications must not replace grid/setlist hosting roots")
     precondition(controls.allSatisfy { $0.count == 1 }, "child control state survives stable root publications")
     print("WORKSPACE_PARENT_PUBLICATIONS_PRESERVE_NATIVE_ROOTS_AND_CHILD_CONTROL_STATE_OK")
+    state.dockRevision += 1; settle(root)
+    precondition(WorkspaceRootUpdateProbe.count == updatesBefore + 1 && rightControl.count == 1,
+                 "a Library or mixer change updates the timeline without replacing Setlist content")
+    print("WORKSPACE_DOCK_CHANGE_RETAINS_SETLIST_ROOT_OK")
 
     let originalWindowSize = window.contentView!.frame.size
     let originalHostedHeight = leftHost.frame.height
@@ -421,19 +428,15 @@ MainActor.assumeIsolated {
     let controls = descendants(WorkspaceControl.self, in: root)
     let first = controls.first { $0.role == "row0" }!
     first.increment(); settle(root)
-    var prior = state.rowHeight
     for height: CGFloat in [61, 62, 63, 64, 80, 120, 240, 90, 64, 63, 56, 55, 40, 24, 55, 56, 64] {
         state.builds.removeAll(); state.rowHeight = height; settle(root)
-        let changesControls = (height < 56) != (prior < 56) || (height < 64) != (prior < 64)
-        precondition(state.builds.count == (changesControls ? 20 : 0),
-                     "height pixels must retain row roots except at compact/minimal control boundaries")
+        precondition(state.builds.isEmpty, "the native row must retain its controls across compact and minimum heights")
         precondition(controls.allSatisfy { abs($0.frame.height - height) < 0.01 },
                      "retained controls must immediately occupy the real height, without scaling")
         precondition(descendants(WorkspaceControl.self, in: root).allSatisfy { current in controls.contains { current === $0 } })
         precondition(first.count == 1, "height changes must preserve live control state")
-        prior = height
     }
-    print("TRACK_MIXER_HEIGHT_REFLOWS_REAL_FRAMES_WITHOUT_ROOT_REBUILD_EXCEPT_CONTROL_BOUNDARIES_OK")
+    print("TRACK_MIXER_HEIGHT_REFLOWS_RETAINED_NATIVE_CONTROLS_ACROSS_COMPACT_AND_MINIMUM_HEIGHTS_OK")
     window.close()
 }
 
@@ -551,7 +554,9 @@ MainActor.assumeIsolated {
         precondition(WorkspaceMixerLayoutProbe.count == baseline,
                      "Setlist viewport changes must not lay out a geometrically unchanged mixer column")
     }
-    scroll.contentView.scroll(to: CGPoint(x: 0, y: 160)); mixer.needsLayout = true; settle(root)
+    // The native row pool keeps 512-point bands warm. Scroll far enough
+    // to reveal a new band while the sibling divider is still being dragged.
+    scroll.contentView.scroll(to: CGPoint(x: 0, y: 680)); mixer.needsLayout = true; settle(root)
     let afterScroll = WorkspaceMixerLayoutProbe.count
     precondition(afterScroll > baseline, "scrolling changes the visible band and must update hosted mixer rows during resize")
     NativeSidebarResizeActivity.shared.contentDidChange(); mixer.needsLayout = true; settle(root)
@@ -561,9 +566,9 @@ MainActor.assumeIsolated {
                  "root identity and environment updates must pass the column gate")
     control.actions(); precondition(state.actions == ["fx1"], "updated column actions must remain current")
     mixer.needsLayout = true; settle(root)
-    let beforeRelease = WorkspaceMixerLayoutProbe.count
     NativeSidebarResizeActivity.shared.end(owner: root); settle(root)
-    precondition(WorkspaceMixerLayoutProbe.count > beforeRelease, "release flushes deferred column layout")
+    precondition(control.revision == 1 && abs(scroll.contentView.bounds.minY - 680) < 1,
+                 "ending resize must preserve the updated column and its scroll position")
     print("SETLIST_RESIZE_RETAINS_MIXER_COLUMN_WITH_SCROLL_MODEL_ENVIRONMENT_ACTIONS_AND_RELEASE_FLUSH_OK")
     window.close()
 }

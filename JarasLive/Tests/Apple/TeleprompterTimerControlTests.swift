@@ -106,7 +106,7 @@ precondition(reopened.mode == .countdown && reopened.targetSeconds == 120)
 window.close()
 let configurationWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 380, height: 445), styleMask: [.titled], backing: .buffered, defer: false)
 configurationWindow.isReleasedWhenClosed = false
-let configuration = NSHostingView(rootView: TeleprompterTimerConfiguration(controller: timer, close: {}))
+let configuration = NSHostingView(rootView: TeleprompterTimerConfiguration(controller: timer))
 configurationWindow.contentView = configuration; configurationWindow.makeKeyAndOrderFront(nil); settle()
 press("Start", in: configuration)
 precondition(timer.running && configurationWindow.attachedSheet == nil, "configuration Start is immediate")
@@ -160,3 +160,17 @@ precondition(timer.displayText() == "00:01:05" && !timer.expired() && timer.disp
 timer.stopAndReset(); timer.setMode(.countdown)
 precondition(timer.targetSeconds == 65 && timer.displayText() == "00:01:05")
 print("TIMER_PROGRESSIVE_COUNTDOWN_PERSISTENCE_ROUNDING_OK")
+
+timer.showConfiguration()
+settle()
+let timerPanel = NSApp.windows.compactMap { $0 as? NSPanel }.first { $0.delegate === timer }!
+let timerContent = timerPanel.contentView
+precondition(timer.configurationOpen && timerPanel.isVisible)
+timerPanel.close()
+settle()
+precondition(!timer.configurationOpen && !timerPanel.isVisible)
+timer.showConfiguration()
+settle()
+precondition(timer.configurationOpen && timerPanel.isVisible && timerPanel.contentView === timerContent)
+timerPanel.close()
+print("TIMER_REOPEN_REUSES_CONFIGURATION_PANEL_OK")

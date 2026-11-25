@@ -179,7 +179,8 @@ for modifiers: NSEvent.ModifierFlags in [[], .shift] {
     precondition(seeks.count == before, "item presses must leave the cursor unchanged until release")
     precondition(grid.handlePointerEvent(event(.leftMouseUp, CGPoint(x: 130,y: 122), modifiers: modifiers)))
     if modifiers.contains(.shift) {
-        precondition(seeks.count == before, "Shift item clicks extend selection without moving the edit cursor")
+        precondition(seeks.count == before + 1 && seeks.last == 130 && freeSeeks.last == true,
+                     "Shift item clicks seek exactly once without snapping and keep the selected range")
     } else {
         precondition(seeks.count == before + 1 && seeks.last == 130, "plain item body clicks seek exactly once at the clicked position")
         precondition(freeSeeks.last == false)
@@ -757,7 +758,10 @@ print("GRID_VISIBLE_ITEM_HEADER_LEFT_SCROLL_AND_CLICK_ALIGNMENT_OK")
 
 // Fade handles sit below the title/control strip; the remaining edge still trims.
 grid.timelineOrigin = .zero
-grid.items = [GridSelectionItem(id: first, rect: CGRect(x: 100, y: 100, width: 400, height: 80), duration: 10)]
+var inactiveFadeLayout = GridSelectionItem(id: first, rect: CGRect(x: 100, y: 100, width: 400, height: 80), duration: 10)
+precondition(inactiveFadeLayout.fadeHandleRect(true) == nil && inactiveFadeLayout.fadeHandleRect(false) == nil)
+inactiveFadeLayout.fadeControlsEnabled = true
+grid.items = [inactiveFadeLayout]
 let fadeLayout = grid.items[0]
 for side in [true, false] {
     precondition(fadeLayout.fadeHandleRect(side)!.minY == 118, "fade grip must sit below the control strip")
@@ -1030,7 +1034,7 @@ print("ITEM_COMPACT_CONTROLS_AND_PAN_GESTURE_OK")
 
 // Locking starts at the native pointer boundary: no callback and no local
 // needle preview may run before the controller rejects a value.
-grid.itemMixLocked = true
+grid.itemMixLocks = TimelineItemControlLocks(volume: true, pan: true)
 let lockedGainCount = gainMotions.count, lockedPanCount = panEdits.count
 func headerBitmap(_ rect: CGRect) -> Data {
     let bitmap = grid.bitmapImageRepForCachingDisplay(in: rect)!
@@ -1049,7 +1053,7 @@ for knob in [compactHeader.gainKnobRect!, compactHeader.panKnobRect!] {
 }
 precondition(gainMotions.count == lockedGainCount && panEdits.count == lockedPanCount,
     "locked gain and pan neither preview, commit nor reset")
-grid.itemMixLocked = false
+grid.itemMixLocks = TimelineItemControlLocks()
 print("ITEM_MIX_LOCK_BLOCKS_NATIVE_GESTURES_AND_NEEDLE_PREVIEWS_OK")
 
 // Growing the title strip only consumes body space; track/item bounds and time

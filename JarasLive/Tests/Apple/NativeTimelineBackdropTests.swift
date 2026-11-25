@@ -66,8 +66,12 @@ for _ in 0..<600 { view.update(content()) }
 precondition(gridLayers[0].path === initialPrimary && gridLayers[1].path === initialRows,
              "Unchanged playback frames must reuse grid geometry")
 // Selection colours are independent from the grid's retained paths.
-view.update(content(bands: [band]))
-precondition(gridLayers[0].path === initialPrimary, "Selecting a track must not rebuild grid lines")
+view.updateBands([band], tile: view.bounds)
+precondition(brightness(bitmap(), x: 200, y: 140) > 0.45)
+view.updateBands([], tile: view.bounds)
+precondition(brightness(bitmap(), x: 200, y: 140) < 0.1)
+precondition(gridLayers[0].path === initialPrimary && gridLayers[1].path === initialRows,
+             "Selecting or clearing a track must not rebuild either grid axis")
 view.update(content(displayScale: 3))
 precondition(gridLayers[0].path !== initialPrimary && gridLayers[1].path !== initialRows, "A different backing scale reprojects both axes")
 print("GRID_GEOMETRY_REUSED_FOR_600_UPDATES_SELECTION_AND_DPI_OK")

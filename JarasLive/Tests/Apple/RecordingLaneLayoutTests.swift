@@ -3,6 +3,7 @@ import Foundation
 @main struct RecordingLaneLayoutTests {
     @MainActor static func main() {
         var track = Track(id: UUID(), name: "Input", role: .other)
+        track.stackedStems = false
         track.clips = [AudioClip(id: UUID(), name: "Existing", startTime: 10, duration: 5)]
         let rowCache = TrackLayoutCache()
         var key = TimelineRenderKey(revision: 1, songID: UUID(), movingClip: nil, movingStart: 0,
@@ -68,6 +69,11 @@ import Foundation
         RecordingLaneLayout.shared.remove(live.id)
         let stopped = TrackRowLayout(tracks: [track], baseHeight: 100)
         precondition(stopped.itemLaneHeight(isolated.id, track: 0) == stopped.audioHeights[0])
+        var stackedAudio = track
+        stackedAudio.stackedStems = true
+        RecordingLaneLayout.shared.reserve(track: stackedAudio, clip: live)
+        precondition(TrackRowLayout(tracks: [stackedAudio], baseHeight: 100).lanes[0].count == 1)
+        RecordingLaneLayout.shared.remove(live.id)
         var pcTrack = Track(id: UUID(), name: "Program Change", role: TrackRole(rawValue: "programChange"))
         pcTrack.programChanges = (1...6).map { slot in
             ProgramChangeMarker(id: UUID(), position: 10, program: slot, channel: 1, name: "PC \(slot)", output: slot)

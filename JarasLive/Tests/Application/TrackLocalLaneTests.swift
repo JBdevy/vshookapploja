@@ -10,6 +10,7 @@ final class TrackLocalLaneTests: XCTestCase {
         let pair = [clip("Pair A", 10, 5), clip("Pair B", 11, 4)]
         let triple = [clip("Triple A", 30, 10), clip("Triple B", 31, 5), clip("Triple C", 32, 6)]
         var track = Track(id: UUID(), name: "Audio", role: .other)
+        track.stackedStems = false
         track.clips = triple + [isolated] + pair
         let layout = TrackLanes(track: track)
         XCTAssertEqual(layout.count, 3)
@@ -26,6 +27,7 @@ final class TrackLocalLaneTests: XCTestCase {
         let a = clip("Long", 0, 10), b = clip("First overlap", 1, 2), c = clip("Later overlap", 8, 4)
         let adjacent = clip("Touching", 12.0.nextDown, 3)
         var track = Track(id: UUID(), name: "Audio", role: .other)
+        track.stackedStems = false
         track.clips = [a, b, c, adjacent]
         let layout = TrackLanes(track: track)
         for item in [a, b, c] { XCTAssertEqual(layout.localCount(for: item.id), 2) }
@@ -34,10 +36,25 @@ final class TrackLocalLaneTests: XCTestCase {
         track.clips[3].startTime = 11.99
         XCTAssertEqual(TrackLanes(track: track).localCount(for: adjacent.id), 2)
     }
+    func testStackedHeadersRecognizeNestedOverlapsAndExcludeTouchingItems() {
+        let long = clip("Long", 0, 10), inner = clip("Nested", 1, 2)
+        let later = clip("Later overlap", 7, 2), touching = clip("Touches only", 10, 2)
+        var track = Track(id: UUID(), name: "Audio", role: .other)
+        track.clips = [inner, later, touching, long]
+        track.stackedStems = true
+        let stacked = TrackLanes(track: track)
+        XCTAssertEqual(stacked.count, 1)
+        for item in [long, inner, later] { XCTAssertTrue(stacked.hasStackedOverlap(item.id)) }
+        XCTAssertFalse(stacked.hasStackedOverlap(touching.id))
+        track.stackedStems = false
+        XCTAssertFalse(TrackLanes(track: track).hasStackedOverlap(long.id))
+    }
+
     func testCompletedTakesCompactLocallyAndActiveReservationPreservesLanes() {
         let base = clip("Base", 10, 10), take = clip("Take", 9, 3, take: 1)
         let unrelated = clip("Later MIDI", 40, 2, take: 12)
         var track = Track(id: UUID(), name: "Audio", role: .other)
+        track.stackedStems = false
         track.clips = [base, take, unrelated]
         var layout = TrackLanes(track: track)
         XCTAssertEqual(layout.localLane(for: base.id), 0)

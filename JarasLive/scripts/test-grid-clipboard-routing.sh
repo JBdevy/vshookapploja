@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 source = Path('Apple/Shared/TimelineGridView.swift').read_text()
 start = source.index('final class RegionShortcutView:')
-helper = source[start:source.index('\n#endif', start)]
+helper = 'enum LibraryKeyboardArea { static func handle(_ event: NSEvent) -> Bool { false } }\n' + source[start:source.index('\n#endif', start)]
 helper = helper.replace('NSEvent.addLocalMonitorForEvents', 'FixtureKeyMonitors.addLocalMonitorForEvents').replace('NSEvent.removeMonitor', 'FixtureKeyMonitors.removeMonitor')
 selection = Path('Apple/Shared/TrackMixerRow.swift').read_text()
 start = selection.index('struct EditorSelectionArea:')

@@ -143,6 +143,25 @@ func audioStrokes(_ frame: MetalWaveformFrame) -> [MetalWaveformStroke] {
 _ = ready(0, 4, scale)
 let stereo = scene(clip)
 let stereoAudio = audioStrokes(stereo)
+var overlappingClip = clip
+overlappingClip.id = UUID()
+let lower = TimelineWaveformItem(clip: clip, fragments: [clip], url: url, rect: rect, gray: 0.3)
+var upper = TimelineWaveformItem(clip: overlappingClip, fragments: [overlappingClip], url: url, rect: rect, gray: 0.8)
+let beforeGain = audioStrokes(TimelineMetalWaveformFrameBuilder.make(items: [lower, upper],
+    viewport: viewport, scale: scale, cache: cache, owner: owner))
+upper.gainPreview = 0.25
+let duringGain = audioStrokes(TimelineMetalWaveformFrameBuilder.make(items: [lower, upper],
+    viewport: viewport, scale: scale, cache: cache, owner: owner))
+let lowerBefore = beforeGain.filter { $0.color.x == lower.gray }
+let lowerDuring = duringGain.filter { $0.color.x == lower.gray }
+let upperBefore = beforeGain.filter { $0.color.x == upper.gray }
+let upperDuring = duringGain.filter { $0.color.x == upper.gray }
+precondition(!lowerBefore.isEmpty && !upperBefore.isEmpty)
+precondition(lowerDuring.map(\.scale) == lowerBefore.map(\.scale),
+             "the lower overlapping waveform must remain in the scene during an upper item's gain drag")
+precondition(upperDuring.map { $0.scale.y } == upperBefore.map { $0.scale.y * 0.25 },
+             "the preview must scale only the adjusted item")
+print("METAL_OVERLAPPING_ITEM_GAIN_PREVIEW_PRESERVES_BOTH_WAVEFORMS_OK")
 MainActor.assumeIsolated {
     var track = Track(id: UUID(), name: "Mixed overlap components", role: .other)
     var pair = clip; pair.id = UUID(); pair.startTime = 30

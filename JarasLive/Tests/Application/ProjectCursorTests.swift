@@ -19,6 +19,7 @@ import XCTest
     func execute(_ command: ShowCommand, target: UUID?, value: Double) throws {
         commands.append((command, target))
         switch command {
+        case .seek: transport.position = value; transport.editPosition = value
         case .editSeek: transport.editPosition = value; if !transport.playing { transport.position = value }
         case .select: transport.songId = target
         case .play:
@@ -159,7 +160,7 @@ final class ProjectCursorTests: XCTestCase {
         XCTAssertNil(legacy.automaticSubplayBars)
         XCTAssertEqual(legacy.subplayLeadSelection, 5)
     }
-    @MainActor func testHeaderClickPausesFollowWithoutSeekingOrChangingRegionSelection() throws {
+    @MainActor func testEmptyRegionBandClickPausesFollowWithoutSeekingOrChangingSelection() throws {
         var project = Project.empty(name: "Header navigation")
         let part = Part(id: UUID(), name: "Song", startTime: 10, endTime: 40)
         project.songs[0].parts = [part]; project.songs[0].duration = 40
@@ -175,7 +176,7 @@ final class ProjectCursorTests: XCTestCase {
         XCTAssertEqual(show.timelineZoomPosition, 27)
         XCTAssertEqual(show.snapshot.transport.position, position)
         XCTAssertEqual(show.snapshot.transport.editPosition, 27)
-        XCTAssertNil(show.selectedTimelineRegion, "Blank header, marker and ruler clicks must not select another band")
+        XCTAssertNil(show.selectedTimelineRegion, "The empty part of the band does not select any region")
         XCTAssertEqual(show.regionFocusRequest, focusRequest, "Pausing follow must not recenter the grid")
         show.selectTimelineRegion(part.id)
         XCTAssertEqual(show.snapshot.transport.editPosition, 27, "The band selects without seeking to the region start")
@@ -187,6 +188,27 @@ final class ProjectCursorTests: XCTestCase {
         XCTAssertFalse(show.timelineFollowPaused)
         show.pauseTimelineFollow()
         XCTAssertEqual(show.selectedTimelineRegion, part.id, "Header interaction preserves the white selection")
+    }
+
+    @MainActor func testRepeatedTimedItemPauseReplacesDeadlineAndSurvivesRegionChange() async throws {
+        var project = Project.empty(name: "Item follow")
+        let first = Part(id: UUID(), name: "First", startTime: 0, endTime: 10)
+        let second = Part(id: UUID(), name: "Second", startTime: 10, endTime: 20)
+        project.songs[0].parts = [first, second]
+        project.songs[0].duration = 20
+        let executor = CursorExecutor()
+        let show = try ShowController(executor: executor, persistence: MemoryProjectStore(), initialProject: project)
+        show.send(.play)
+        show.pauseTimelineFollow(resumingAfter: 0.05)
+        show.pauseTimelineFollow(resumingAfter: 0.5)
+        executor.transport.position = 10
+        executor.transport.regionId = second.id
+        show.tick()
+        XCTAssertTrue(show.timelineFollowPaused, "A region crossing must preserve a timed item pause")
+        try await Task.sleep(nanoseconds: 150_000_000)
+        XCTAssertTrue(show.timelineFollowPaused, "The first item's timer cannot resume the new pause")
+        try await Task.sleep(nanoseconds: 450_000_000)
+        XCTAssertFalse(show.timelineFollowPaused)
     }
 
     @MainActor func testRegionBandSelectionExtendsInTimeOrderAndTogglesWithoutSeeking() throws {
@@ -215,6 +237,55 @@ final class ProjectCursorTests: XCTestCase {
         XCTAssertTrue(show.selectedTimelineRegions.isEmpty)
     }
 
+    @MainActor func testPlaybackAdvanceAccountsForDelayedFirstRecordingSampleWithoutCountingSeeks() throws {
+        let executor = CursorExecutor()
+        var now = 1.0
+        let show = try ShowController(executor: executor, persistence: MemoryProjectStore(),
+                                      initialProject: Project.empty(name: "Recording"), playbackClock: { now })
+        show.send(.play)
+        defer { show.send(.stop) }
+        now = 1.35
+        let recordStart = show.snapshot.transport.position
+        let engineTimeAtRecordStart = show.timelinePlaybackAdvance
+        now = 1.39
+        show.tick()
+        XCTAssertEqual(show.timelinePlaybackAdvance - engineTimeAtRecordStart, 0.39, accuracy: 0.000001)
+        XCTAssertEqual(show.snapshot.transport.position,
+                       recordStart + show.timelinePlaybackAdvance - engineTimeAtRecordStart, accuracy: 0.000001)
+        let advanceBeforeSeek = show.timelinePlaybackAdvance
+        now = 1.65
+        show.send(.editSeek, value: 3)
+        XCTAssertEqual(show.timelinePlaybackAdvance - advanceBeforeSeek, 0.26, accuracy: 0.000001)
+        XCTAssertEqual(show.snapshot.transport.position, 0.65, accuracy: 0.000001)
+        let advanceBeforeJump = show.timelinePlaybackAdvance
+        show.send(.seek, value: 5)
+        XCTAssertEqual(show.snapshot.transport.position, 5)
+        XCTAssertEqual(show.timelinePlaybackAdvance, advanceBeforeJump)
+    }
+
+    @MainActor func testZoomAnchorChangesOnlyAfterAnExplicitCursorMove() throws {
+        let executor = CursorExecutor()
+        let show = try ShowController(executor: executor, persistence: MemoryProjectStore(), initialProject: Project.empty(name: "Zoom"))
+        show.send(.editSeek, value: 3)
+        show.send(.play)
+        executor.transport.position = 25
+        show.tick()
+        XCTAssertEqual(show.timelineZoomPosition, 3)
+        show.send(.seek, value: 40)
+        executor.transport.position = 45
+        show.tick()
+        XCTAssertEqual(show.timelineZoomPosition, show.snapshot.transport.position)
+        show.send(.editSeek, value: 12)
+        XCTAssertEqual(show.timelineZoomPosition, 12)
+        XCTAssertGreaterThan(show.snapshot.transport.position, 40)
+        show.send(.seek, value: 20)
+        show.send(.stop)
+        show.send(.play)
+        executor.transport.position = 30
+        show.tick()
+        XCTAssertEqual(show.timelineZoomPosition, 20)
+    }
+
     @MainActor func testRegionBandClickPausesFollowUntilStopOrNextSongAndKeepsHighlight() throws {
         var project = Project.empty(name: "Navigation")
         let first = Part(id: UUID(), name: "First", startTime: 0, endTime: 10)
@@ -225,7 +296,7 @@ final class ProjectCursorTests: XCTestCase {
         show.send(.play)
         show.send(.editSeek, value: 4)
         XCTAssertFalse(show.timelineFollowPaused, "Editing the cursor alone must not disable continuous follow")
-        XCTAssertEqual(show.timelineZoomPosition, show.snapshot.transport.position)
+        XCTAssertEqual(show.timelineZoomPosition, 4)
         show.selectTimelineRegion(first.id)
         XCTAssertTrue(show.timelineFollowPaused)
         XCTAssertEqual(show.selectedTimelineRegion, first.id)
@@ -238,7 +309,7 @@ final class ProjectCursorTests: XCTestCase {
         show.tick()
         XCTAssertFalse(show.timelineFollowPaused, "Starting another song resumes follow")
         XCTAssertEqual(show.selectedTimelineRegion, first.id, "Playback changes must preserve the white band selection")
-        XCTAssertEqual(show.timelineZoomPosition, 10, accuracy: 0.05)
+        XCTAssertEqual(show.timelineZoomPosition, 6)
         show.selectTimelineRegion(first.id)
         XCTAssertTrue(show.timelineFollowPaused, "Clicking the same highlighted band must pause again")
         show.send(.stop)

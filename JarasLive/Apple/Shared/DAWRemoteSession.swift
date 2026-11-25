@@ -1013,7 +1013,10 @@ final class DAWRemoteSession: NSObject, ObservableObject {
     }
     func startHost() {
         guard role == .host else { return }
-        stop(); enabled = true; status = "Waiting for connection"
+        // A disabled host has already released its clients and listener. Running
+        // the shutdown path again republishes all remote controls on activation.
+        if enabled { stop() }
+        enabled = true; status = "Waiting for connection"
         do {
             let listener = try NWListener(using: DAWRemoteChannel.parameters())
             listener.service = NWListener.Service(name: name, type: "_\(DAWRemoteWire.service)._tcp")

@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 @MainActor private final class PreparationGate {
     private var continuation: CheckedContinuation<Void, Never>?
@@ -86,5 +87,20 @@ import Foundation
         precondition(show.snapshot.transport.beatSeek?.destination == 5 && !show.preparingAudio)
         show.send(.stopAll)
         print("LIVE_SEEK_LATEST_WINS_STOP_EDIT_RECORDING_AND_BEAT_BOUNDARY_OK")
+
+        let nativeGrid = ShowTimelinePresentationObserver(show: show, nativeTransportOverlay: true)
+        var layoutChanges = 0
+        let layoutObserver = nativeGrid.objectWillChange.sink { layoutChanges += 1 }
+        show.send(.play)
+        await settle()
+        show.send(.stopAll)
+        await settle()
+        precondition(layoutChanges == 0, "Playback-only changes must not invalidate the AppKit grid's hosted rows")
+        if let track = show.current?.tracks.first?.id {
+            show.setMixerTrackSelection([track], anchor: track)
+            precondition(layoutChanges == 1, "Native track selection must still refresh the mixer immediately")
+        }
+        withExtendedLifetime(layoutObserver) {}
+        print("NATIVE_GRID_RETAINS_LAYOUT_ON_PLAY_STOP_AND_REFRESHES_SELECTION_OK")
     }
 }

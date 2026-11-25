@@ -23,6 +23,7 @@ project.songs[0].tracks[0].clips[0].fadeIn = 2
 project.songs[0].tracks[0].clips[0].fadeOut = 3
 project.songs[0].tracks[0].clips[0].gain = 1.25
 project.songs[0].tracks[0].clips[0].playbackRate = 1.5
+project.songs[0].tracks[0].clips[0].elasticPoints = [ElasticPoint(position: 0.6, source: 0.4)]
 project.songs[0].tracks[0].clips[0].loopStart = 1
 project.songs[0].tracks[0].clips[0].loopLength = 3
 var itemFX = NativeFXSettings()

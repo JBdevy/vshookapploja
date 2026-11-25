@@ -88,6 +88,8 @@ enum JarasTheme {
     static let desktopTransportGradient = [Color(hex: 0x262626), Color(hex: 0x1a1a1a)]
     static let transportControlGroup = Color(hex: 0x343434)
     static let workspaceTransportGradient = [Color(hex: 0x10291c), Color(hex: 0x07100b)]
+    static let proTransportTop = Color(hex: 0x160e20)
+    static let proTransportGradient = Gradient(colors: [proTransportTop, Color(hex: 0x08060c)])
     static let licenseTitleGreen = Color(hex: 0x54ff93)
     static let transportPlay = Color(hex: 0x24f06a)
     static let liveOffRed = Color(hex: 0xff3030)
@@ -130,6 +132,7 @@ enum MixerTrackStyle: String {
     case standard = "default"
     case stripeOnly
 
+    static let defaultStyle: Self = .stripeOnly
     static let trackMixerKey = "jaras.trackMixer.trackStyle"
     static let hozMixerKey = "jaras.hozMixer.trackStyle"
     static let trackStripeWidth: CGFloat = 5
@@ -545,12 +548,14 @@ private final class NativeJarasBlinkHost: NSHostingView<AnyView> {
     }
 }
 
-/// CatLive factory colors. Explicit user timeline choices remain intact.
+/// CatLive factory timeline appearance. Explicit user choices remain intact.
 enum TimelineAppearanceDefaults {
     static let leadingSpace: CGFloat = 6
+    static let invertWaveformColorsKey = "jaras.timeline.invertWaveformColors"
+    static let invertWaveformColors = true
     static let secondaryGrid = 0x333235
     static let playCursor = 0xF44336
-    static let editCursor = 0x00A65A
+    static let editCursor = 0xFFC107
     static let subPlayCursor = Int(JarasTheme.setlistQueuedYellow)
 }
 

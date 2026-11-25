@@ -1,5 +1,6 @@
 // Standalone UIKit responder regression app; built by test-ipad-hardware-keyboard.sh.
 import UIKit
+@MainActor enum LibraryKeyboardTarget { static func pointer(at point: CGPoint) {} }
 @MainActor final class ControlMappings { static let shared = ControlMappings(); var editing: Int?; var transferRequest: Int? }
 final class ProbeKey: UIKey {
     let usage: UIKeyboardHIDUsage; let flags: UIKeyModifierFlags; let text: String

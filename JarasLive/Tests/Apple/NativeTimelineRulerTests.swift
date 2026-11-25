@@ -81,3 +81,20 @@ precondition(grid.strokeColor == retainedTickLayer.strokeColor && grid.lineWidth
              "Continuous lines and intermediate ticks share style")
 precondition(retainedTickLayer.path!.boundingBoxOfPath.maxY == 80, "Intermediate ticks end at the ruler boundary")
 print("RULER_NUMBERED_VERTICAL_LINES_AND_UNDUPLICATED_TICKS_OK")
+
+private let origin: CGFloat = 12_000
+view.update(content(origin: origin, ticks: [
+    .init(x: origin + 40, primary: true, text: "13"),
+    .init(x: origin + 120, primary: true, text: "17")
+]))
+let numberLabels = view.layer!.sublayers!.suffix(2)
+let firstNumber = numberLabels.first!, nextNumber = numberLabels.last!
+let tickPathBeforeMove = retainedTickLayer.path!
+view.setTempoHeads([CGRect(x: origin + 35, y: 49, width: 59, height: 14)])
+precondition(firstNumber.isHidden && !nextNumber.isHidden, "A tempo head hides only the overlapping number")
+view.setTempoHeads([CGRect(x: origin + 115, y: 49, width: 49, height: 14)])
+precondition(!firstNumber.isHidden && nextNumber.isHidden, "Moving a tempo head reveals the previous number")
+view.setTempoHeads([])
+precondition(!firstNumber.isHidden && !nextNumber.isHidden, "Removing a tempo head restores its number")
+precondition(retainedTickLayer.path === tickPathBeforeMove, "Changing a tempo head keeps the grid ticks intact")
+print("RULER_TEMPO_HEAD_COLLISION_MOVE_AND_REMOVAL_OK")

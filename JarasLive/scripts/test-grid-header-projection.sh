@@ -27,7 +27,12 @@ source = source.replace(needle, wrapper + needle)
 theme = Path('Apple/Shared/Theme.swift').read_text()
 colors = 'extension Color {' + theme.split('extension Color {', 1)[1].split('\n}', 1)[0] + '\n}\n'
 typography = colors + '// App-owned typography.' + theme.split('// App-owned typography.', 1)[1]
-(out / 'main.swift').write_text('import SwiftUI\n' + typography + '\n' + Path('Tests/Apple/GridHeaderProjectionTests.swift').read_text())
+models = Path('Application/Project/ProjectModels.swift').read_text()
+elastic = models[models.index('public struct ElasticPoint:'):models.index('public struct AudioClip:')]
+transport = Path('Apple/Shared/TransportView.swift').read_text()
+tool = transport[transport.index('enum ProGridTool:'):transport.index('struct ProGridToolPicker:')]
+tool = tool[:tool.index('    @MainActor func apply(')] + tool[tool.index('    var symbol:'):]
+(out / 'main.swift').write_text('import SwiftUI\n' + typography + '\n' + elastic + tool + Path('Tests/Apple/GridHeaderProjectionTests.swift').read_text())
 PY
 swiftc Application/Project/ItemFadeCurve.swift -swift-version 5 -target "$(uname -m)-apple-macos12.0" Apple/Shared/NativeTooltips.swift Apple/Shared/NativeTimelineInputGate.swift "$test_dir/GridSelectionInput.swift" "$test_dir/main.swift" -o "$test_dir/test"
 "$test_dir/test"

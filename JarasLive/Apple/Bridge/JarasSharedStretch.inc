@@ -43,9 +43,13 @@ struct PreparedStretchGroup {
         return true;
     }
     void trimStoppedTransitionStorage() {
-        std::lock_guard<std::mutex> lock(preparation);
-        if (registeredVoices <= 2 && activeVoices <= 1)
-            pool.trimUnusedIfUnshared(activeVoices == 0);
+        std::vector<std::unique_ptr<PreparedStretchState>> retired;
+        {
+            std::lock_guard<std::mutex> lock(preparation);
+            if (registeredVoices <= 2 && activeVoices <= 1)
+                retired = pool.trimUnusedIfUnshared(activeVoices == 0);
+        }
+        // Large FFT allocations are freed after releasing the preparation lock.
     }
     bool prepareActivation(double rate) {
         std::lock_guard<std::mutex> lock(preparation);

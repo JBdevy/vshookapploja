@@ -82,14 +82,14 @@ private func dictionaryValues(_ dictionary: Any) -> [Any] {
 
 @MainActor private func activePlayers(_ audio: StemAudioPlayback) -> Set<ObjectIdentifier> {
     Set(dictionaryValues(property("voices", of: audio)).map {
-        ObjectIdentifier(property("player", of: $0) as! AVAudioPlayerNode)
+        ObjectIdentifier(property("player", of: $0) as AnyObject)
     })
 }
 
 @MainActor private func pooledPlayers(_ audio: StemAudioPlayback) -> Set<ObjectIdentifier> {
     Set(dictionaryValues(property("idleVoices", of: audio)).flatMap { pool in
         Mirror(reflecting: pool).children.map {
-            ObjectIdentifier(property("player", of: $0.value) as! AVAudioPlayerNode)
+            ObjectIdentifier(property("player", of: $0.value) as AnyObject)
         }
     })
 }

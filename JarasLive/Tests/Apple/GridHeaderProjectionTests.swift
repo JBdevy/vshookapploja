@@ -39,6 +39,8 @@ precondition(alphaAt(selectedPixels, 107) == 255 && alphaAt(deselectedPixels, 10
              "Selection fills the entire visible header, including beyond the title")
 precondition(alphaAt(selectedPixels, 135) == alphaAt(deselectedPixels, 135),
              "Selection stripe leaves the waveform body untouched")
+precondition(alphaAt(deselectedPixels, 116) > 0 && alphaAt(deselectedPixels, 115) == 0,
+             "One narrow line separates the header from the waveform across the whole item")
 grid.updateSelection([])
 precondition(pixels() == deselectedPixels, "Clearing selection must restore the original header")
 print("GRID_HEADER_SELECTION_INVALIDATION_AND_RESTORE_OK")
@@ -47,7 +49,7 @@ for scale in [1, 2] {
     let reference = pixels(scale: scale)
     for frame in 1...400 {
         grid.timelineOrigin.x = 900 + CGFloat(frame) * 1.25
-        precondition(!grid.invalidateHeaderProjectionIfNeeded(), "unchanged pinned headers retain backing during continuous scroll")
+        precondition(!grid.invalidateHeaderProjectionIfNeeded(), "offscreen item controls do not invalidate the backing")
         precondition(pixels(scale: scale) == reference, "skipping redraw preserves actual rendered pixels at each scale")
     }
     grid.timelineOrigin.x = 1
@@ -60,7 +62,7 @@ for scale in [1, 2] {
     precondition(grid.invalidateHeaderProjectionIfNeeded(), "visible fade grips follow every scroll frame")
     _ = pixels(scale: scale)
 }
-grid.timelineOrigin = CGPoint(x: 900, y: 0)
+grid.timelineOrigin = .zero
 _ = pixels()
 let unchanged = GridSelectionLayout(items: [item])
 grid.updateLayout(unchanged, pixelsPerSecond: 30)
@@ -103,8 +105,8 @@ grid.timelineOrigin.x += 100
 precondition(!grid.invalidateHeaderProjectionIfNeeded(), "empty grid scroll needs no header painting")
 print("GRID_HEADER_800_STABLE_SCROLL_FRAMES_IDENTICAL_PIXELS_1X_2X_FADES_CONTROLS_AND_DELETION_OK")
 
-// A growing recording must keep its name at the visible left edge even inside
-// a 512-point hosted-canvas bucket, and when crossing several bucket edges.
+// An offscreen recording name does not jump to the visible edge as the
+// recording grows, including across hosted-canvas bucket boundaries.
 grid.updateLayout(GridSelectionLayout(items: []), pixelsPerSecond: 30)
 grid.timelineOrigin = CGPoint(x: 900, y: 0)
 var take = GridSelectionItem(id: UUID(), rect: CGRect(x: 0, y: 100, width: 1250, height: 70),
@@ -120,7 +122,7 @@ for scale in [1, 2] {
         take.rect.size.width = grid.timelineOrigin.x + 350
         grid.updateLayout(GridSelectionLayout(items: []), pixelsPerSecond: 30)
         grid.recordingHeaders = [take]
-        precondition(pixels(scale: scale) == reference, "recording title must stay fixed during continuous scroll and growth")
+        precondition(pixels(scale: scale) == reference, "offscreen recording name must remain outside the viewport")
     }
 }
 let recordingPixels = pixels()
@@ -128,7 +130,7 @@ grid.recordingHeaders = []
 precondition(pixels() != recordingPixels, "finishing a take clears its temporary title")
 print("RECORDING_HEADER_2000_GROWING_SCROLL_FRAMES_STABLE")
 
-// Follow visibility is a state transition, independent of a zoom gesture.
+// Playback follow translates the viewport without moving the item header.
 item.fadeIn = 0; item.fadeOut = 0
 let threshold = GridSelectionItem.followingHeaderMinimumScale
 let headerLayout = GridSelectionLayout(items: [item])
@@ -142,13 +144,11 @@ let lowVisible = pixels()
 following(true)
 precondition(pixels() == lowVisible, "Distant zoom keeps names visible during continuous follow")
 grid.updateLayout(headerLayout, pixelsPerSecond: threshold)
-let hidden = pixels()
-precondition(hidden != lowVisible, "At the reference zoom, active follow hides item controls and names")
-following(false)
 let highVisible = pixels()
-precondition(highVisible != hidden, "Stopping/manual interruption must restore rendered names without another zoom")
+following(false)
+precondition(pixels() == highVisible, "Stopping does not alter the item header")
 following(true)
-precondition(pixels() == hidden, "Resuming continuous follow hides names again")
+precondition(pixels() == highVisible, "Continuous follow keeps controls at the item start")
 grid.updateLayout(headerLayout, pixelsPerSecond: threshold - 0.01)
 precondition(pixels() == lowVisible, "Zooming below the reference restores names while playback continues")
 following(false)
@@ -156,10 +156,10 @@ grid.timelineOrigin.x = 100
 let lowScrolled = pixels()
 precondition(lowScrolled != lowVisible, "Distant headers move with their original item start")
 grid.updateLayout(headerLayout, pixelsPerSecond: threshold)
-let pinnedReference = pixels()
-grid.timelineOrigin.x = 200
-precondition(pixels() == pinnedReference, "Closer manual scrolling keeps headers at the visible edge")
-print("GRID_HEADER_REFERENCE_ZOOM_FIXED_START_FOLLOW_HIDE_STOP_MANUAL_AND_RESUME_OK")
+let fixedReference = pixels()
+grid.timelineOrigin.x = 900
+precondition(pixels() != fixedReference, "Closer scrolling carries the item controls past the viewport edge")
+print("GRID_HEADER_REFERENCE_ZOOM_FIXED_START_FOLLOW_STOP_MANUAL_AND_RESUME_OK")
 
 // More simultaneously visible names than the shared bitmap cache can retain.
 // Keep their positions inside the viewport throughout rapid zoom reversals.

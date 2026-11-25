@@ -286,7 +286,8 @@ import CoreMIDI
         case .auto: feedback(show.regionSetlist.autoAdvance ? "AUTO ATIVO" : "AUTO DESATIVADO", color: 0xe67e22)
         case .preview: feedback(TeleprompterWindow.shared.previewActive ? "PREVIEW ATIVADO" : "PREVIEW DESATIVADO", color: 0x55cfff)
         case .previewPage:
-            let first = TeleprompterWindow.shared.previewPage * 4 + 1; feedback("BLOCO \(first)-\(first + 3)", color: 0x55cfff)
+            let preview = TeleprompterWindow.shared
+            feedback("BLOCO \(preview.previewSlots.label(preview.previewPage))", color: 0x55cfff)
         case .songs: break // The list navigation publishes the actual visible order.
         case .repeatLoop: if !t.loop.enabled && t.multiLoop == nil { feedback("LOOP DESATIVADO") }
         case .scrollTracks(let direction): feedback(direction < 0 ? "TRACK MIXER ACIMA" : "TRACK MIXER ABAIXO")

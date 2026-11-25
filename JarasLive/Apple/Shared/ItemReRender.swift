@@ -50,6 +50,8 @@ enum ItemReRender {
             result.sourceOffset = 0; result.playbackRate = 1; result.gain = 1; result.normalizationGain = nil; result.channelMode = nil; result.phaseInverted = nil; result.pan = nil
             result.tempoBasePlaybackRate = nil
             result.renderedTempo = true
+            result.elasticPoints = nil
+            result.elasticSourceScale = nil
             result.loopStart = nil; result.loopLength = nil; result.fx = nil; result.fxBypassed = nil
             result.automation = nil; result.automationSourceOffset = nil
             result.waveform = overview.waveform; result.waveformChannels = overview.channels

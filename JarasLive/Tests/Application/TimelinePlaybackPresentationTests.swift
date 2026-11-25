@@ -167,6 +167,35 @@ final class TimelinePlaybackPresentationTests: XCTestCase {
         XCTAssertEqual(TimelinePlaybackPresentation(transport: sample, elapsed: 0.05, songDuration: 5).mainPosition, 10,
                        "A stale duration must not drag the authoritative cursor backwards.")
     }
+    func testTransportTitleUsesTheActiveCursorAndSkipsNonNavigationMarkers() {
+        var song = Project.demo().songs[0]
+        let region = Part(id: UUID(), name: "Next Song", startTime: 30, endTime: 50)
+        let child = Part(id: UUID(), name: "Nested", startTime: 15, endTime: 20, parentRegionID: region.id)
+        song.parts = [child, region]
+        song.markers = [
+            .init(id: UUID(), name: "Tempo", position: 9, color: 0, tempoBPM: 123),
+            .init(id: UUID(), name: "Ordinary", position: 10, color: 0),
+            .init(id: UUID(), name: "Section", position: 12, color: 0, section: true),
+            .init(id: UUID(), name: "Old Title", position: 20, color: 0, sourceRegionID: region.id)
+        ]
+        var state = transport(main: 12, playing: false)
+        state.editPosition = 9
+        XCTAssertNil(TransportTitleMode.markers.cursorTitle(in: song, transport: state))
+        XCTAssertEqual(TransportTitleMode.nextMarker.cursorTitle(in: song, transport: state), "Ordinary")
+        state.editPosition = 10
+        XCTAssertEqual(TransportTitleMode.markers.cursorTitle(in: song, transport: state), "Ordinary")
+        XCTAssertEqual(TransportTitleMode.nextMarker.cursorTitle(in: song, transport: state), region.displayName)
+        XCTAssertEqual(TransportTitleMode.nextTimelineRegion.cursorTitle(in: song, transport: state), region.displayName)
+        state.editPosition = 0
+        state.playing = true
+        state.position = 20
+        XCTAssertEqual(TransportTitleMode.markers.cursorTitle(in: song, transport: state), region.displayName)
+        XCTAssertNil(TransportTitleMode.nextMarker.cursorTitle(in: song, transport: state))
+        state.playing = false
+        state.paused = true
+        XCTAssertEqual(TransportTitleMode.markers.cursorTitle(in: song, transport: state), region.displayName)
+    }
+
     func testSongDisplaysSeparateNextAndQueueAndDoNotBorrowPreviousTempo() {
         var song = Project.demo().songs[0]
         let root = Part(id: UUID(), name: "Medley", startTime: 0, endTime: 30)

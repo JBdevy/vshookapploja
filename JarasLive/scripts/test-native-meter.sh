@@ -17,7 +17,8 @@ row=Path('Apple/Shared/TrackMixerRow.swift').read_text()
 policy_start=row.index('private func trackShowsMeterReadouts(')
 policy=row[policy_start:row.index('\n}', policy_start)+2]
 theme=Path('Apple/Shared/Theme.swift').read_text()
-colors=theme[theme.index('extension Color {'):theme.index('struct ProjectSaveIcon:')]
+color_start=theme.index('extension Color {')
+colors=theme[color_start:theme.index('\n}', color_start)+2]
 appearance=theme[theme.index('enum JarasInterfaceTheme:'):theme.index('enum JarasTheme {')]
 display = '; '.join(line.strip() for line in theme.splitlines() if any(
     name in line for name in ('static let displayHex:', 'static let lightDarkBackgroundHex:',

@@ -165,7 +165,6 @@ struct SongListView: View {
         let project: UUID
         let song: UUID
         let playlist: UUID?
-        let keyboard: Bool
         let blocksOnly: Bool
     }
     @State private var removal: EntryRemoval?
@@ -192,11 +191,6 @@ struct SongListView: View {
     @AppStorage("jaras.setlist.allRegionsOrder") private var allRegionsOrder = 0
     @State private var creatingPlaylist = false
     @State private var addingToPlaylist: UUID?
-    private var playlistCandidates: [Part] {
-        guard let id = addingToPlaylist, let playlist = show.regionSetlist.playlists.first(where: { $0.id == id }) else { return show.allRegions }
-        let existing = Set(playlist.regionIds.map { playlist.regionSourceID(forEntry: $0) })
-        return show.allRegions.filter { !existing.contains($0.id) }
-    }
     @State private var showingAutoOptions = false
     @State private var subplayTrackSelection: SubplayTrackSelectionRequest?
     @State private var configInitRegion: Part?
@@ -204,17 +198,6 @@ struct SongListView: View {
     @State private var searching = false
     @State private var highlightedSearchID: UUID?
     @State private var query = ""
-    @State private var playlistName = ""
-    @State private var playlistQuery = ""
-    private var filteredPlaylistCandidates: [Part] {
-        let term = playlistQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        return playlistCandidates.filter { term.isEmpty || $0.displayName.range(of: term, options: [.caseInsensitive, .diacriticInsensitive]) != nil }
-    }
-    @State private var missingPlaylistName = false
-    @State private var nameShake = 0.0
-    @FocusState private var playlistNameFocused: Bool
-    @State private var selection: [UUID] = []
-    @State private var selectionAnchor: UUID?
     @FocusState private var searchFocused: Bool
     private func visibleFocusID(_ id: UUID) -> UUID {
         setlistVisibleRegionID(id, parent: show.playlistRegion(id)?.parentRegionID,
@@ -223,11 +206,11 @@ struct SongListView: View {
     private func requestRemoval(_ ids: Set<UUID>, keyboard: Bool) {
         guard !creatingPlaylist, !choosingPlaylist, !searching, editingEntry == nil,
               let song = show.current else { return }
-        let allowed = show.deletableSetlistEntries(ids)
-        guard !allowed.isEmpty else { return }
         let blocks = Set(show.listedBlocks.map(\.id))
+        let allowed = show.deletableSetlistEntries(keyboard ? ids.intersection(blocks) : ids)
+        guard !allowed.isEmpty else { return }
         removal = EntryRemoval(ids: allowed, project: show.snapshot.project.id, song: song.id,
-                               playlist: show.selectedRegionPlaylist?.id, keyboard: keyboard,
+                               playlist: show.selectedRegionPlaylist?.id,
                                blocksOnly: allowed.isSubset(of: blocks))
         confirmingRemoval = true
     }
@@ -386,14 +369,11 @@ struct SongListView: View {
                     .popover(isPresented: $choosingPlaylist, arrowEdge: .bottom) {
                         PlaylistSelectionPanel(show: show, isPresented: $choosingPlaylist, maximumListHeight: $playlistMaximumListHeight, addRegions: { id in
                             addingToPlaylist = id
-                            playlistName = show.regionSetlist.playlists.first { $0.id == id }?.name ?? ""
-                            missingPlaylistName = false; selection = []; selectionAnchor = nil
-                            playlistQuery = ""; choosingPlaylist = false; creatingPlaylist = true
+                            choosingPlaylist = false; creatingPlaylist = true
                         }, copyPlaylist: copyPlaylist) { query = "" }
                     }
                 Button {
-                    addingToPlaylist = nil; playlistName = ""; missingPlaylistName = false; nameShake = 0; selection = []; selectionAnchor = nil
-                    playlistQuery = ""; choosingPlaylist = false; creatingPlaylist = true
+                    addingToPlaylist = nil; choosingPlaylist = false; creatingPlaylist = true
                 } label: { Image(systemName: "plus").frame(width: 27, height: 30).contentShape(Rectangle()) }
                     .buttonStyle(.plain).jarasHelp("Create playlist").accessibilityLabel("Create playlist")
                 Button { searching.toggle() } label: {
@@ -500,7 +480,8 @@ struct SongListView: View {
                                     }
                                     if region.parentRegionID == nil {
                                     Button(JarasLocalization.string(playlist == nil ? "Delete region" : "Remove from playlist"), role: .destructive) {
-                                        requestRemoval([region.id], keyboard: false)
+                                        let blocks = Set(show.listedBlocks.map(\.id))
+                                        requestRemoval(targets.subtracting(blocks), keyboard: false)
                                     }
                                     }
                                 }
@@ -555,7 +536,12 @@ struct SongListView: View {
                 toggleLive: { show.toggleSetlistLive() }, toggleParts: toggleParts)
         }
         .overlay(alignment: .top) {
-            if creatingPlaylist { creationPanel }
+            if creatingPlaylist {
+                SetlistPlaylistCreationPanel(show: show, addingToPlaylist: addingToPlaylist) { applied in
+                    creatingPlaylist = false; addingToPlaylist = nil
+                    if applied { query = "" }
+                }
+            }
         }
         #if os(macOS)
         .background(EditorSelectionArea(scope: .setlist) {
@@ -760,11 +746,43 @@ struct SongListView: View {
         .background(RemoteKeyboardDismissal(active: searchFocused) { searchFocused = false })
         #endif
     }
-    private var creationPanel: some View {
+
+}
+
+@MainActor struct SetlistPlaylistCreationPanel: View {
+    let show: ShowController
+    let addingToPlaylist: UUID?
+    let dismiss: (Bool) -> Void
+
+    init(show: ShowController, addingToPlaylist: UUID?, dismiss: @escaping (Bool) -> Void) {
+        self.show = show
+        self.addingToPlaylist = addingToPlaylist
+        self.dismiss = dismiss
+        _playlistName = State(initialValue: show.regionSetlist.playlists.first { $0.id == addingToPlaylist }?.name ?? "")
+    }
+
+    private var playlistCandidates: [Part] {
+        guard let id = addingToPlaylist, let playlist = show.regionSetlist.playlists.first(where: { $0.id == id }) else { return show.allRegions }
+        let existing = Set(playlist.regionIds.map { playlist.regionSourceID(forEntry: $0) })
+        return show.allRegions.filter { !existing.contains($0.id) }
+    }
+    @State private var playlistName = ""
+    @State private var playlistQuery = ""
+    private var filteredPlaylistCandidates: [Part] {
+        let term = playlistQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        return playlistCandidates.filter { term.isEmpty || $0.displayName.range(of: term, options: [.caseInsensitive, .diacriticInsensitive]) != nil }
+    }
+    @State private var missingPlaylistName = false
+    @State private var nameShake = 0.0
+    @FocusState private var playlistNameFocused: Bool
+    @State private var selection: [UUID] = []
+    @State private var selectionAnchor: UUID?
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text(addingToPlaylist == nil ? "New playlist" : "Add regions").font(.jarasSystem(size: 13, weight: .semibold)); Spacer()
-                Button { creatingPlaylist = false } label: { Image(systemName: "xmark").frame(width: 30, height: 30).contentShape(Rectangle()) }.buttonStyle(.plain).accessibilityLabel("Cancel playlist creation")
+                Button { dismiss(false) } label: { Image(systemName: "xmark").frame(width: 30, height: 30).contentShape(Rectangle()) }.buttonStyle(.plain).accessibilityLabel("Cancel playlist creation")
             }
             TextField("Playlist name", text: $playlistName).textFieldStyle(.roundedBorder).disabled(addingToPlaylist != nil)
                 .focused($playlistNameFocused)
@@ -838,10 +856,10 @@ struct SongListView: View {
             }
         }.padding(10).frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(JarasTheme.panel).overlay(Rectangle().stroke(JarasTheme.line))
+            .contentShape(Rectangle())
     }
     private func createPlaylist() {
-        guard creatingPlaylist else { return }
-        guard !playlistName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard addingToPlaylist != nil || !playlistName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             missingPlaylistName = true
             playlistNameFocused = true
             withAnimation(.linear(duration: 0.32)) { nameShake += 1 }
@@ -850,9 +868,7 @@ struct SongListView: View {
         guard !selection.isEmpty else { return }
         let applied = addingToPlaylist.map { show.addRegionsToPlaylist($0, selected: selection) }
             ?? show.createRegionPlaylist(name: playlistName, selected: selection)
-        if applied {
-            creatingPlaylist = false; query = ""
-        }
+        if applied { dismiss(true) }
     }
     private func selectForPlaylist(_ id: UUID) {
         let ids = filteredPlaylistCandidates.map(\.id)
@@ -1671,6 +1687,7 @@ final class SetlistKeyView: NSView {
                 if !event.modifierFlags.intersection([.command,.control,.option,.shift]).isEmpty { self.stopRepeating(commit: false) }
                 return event
             }
+            if LibraryKeyboardArea.handle(event) { self.stopRepeating(commit: false); return nil }
             let playlistModifiers = event.modifierFlags.intersection([.command,.control,.option,.shift])
             // Register on the document before opening the popover: AppKit's
             // popover editor can consume Tab before monitors installed inside it.

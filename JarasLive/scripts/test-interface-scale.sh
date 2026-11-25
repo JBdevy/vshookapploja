@@ -10,6 +10,9 @@ source=Path('Apple/Shared/TransportView.swift').read_text()
 style=source[source.index('struct TransportButtonStyle:'):source.index('struct TransportPreview:')]
 theme=Path('Apple/Shared/Theme.swift').read_text()
 theme=theme[:theme.index('    static func track(')]+'}\n'+theme[theme.index('extension Color {'):]
+# The toolbar label has its own hover event routing and is outside this fixture.
+start=theme.index('struct DesktopToolbarLabel:')
+theme=theme[:start]+theme[theme.index('\n#endif',start):]
 fixture=Path('Tests/Apple/InterfaceScalingTests.swift').read_text()
 Path(sys.argv[1]).write_text(theme+'\n'+style+'\n'+fixture)
 PYTEST

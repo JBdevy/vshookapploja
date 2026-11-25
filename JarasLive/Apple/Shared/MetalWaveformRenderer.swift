@@ -20,7 +20,7 @@ struct MetalWaveformStroke {
     let channel: Int
     let scale: SIMD2<Float>
     let translation: SIMD2<Float>
-    let clip: CGRect
+    var clip: CGRect
     let color: SIMD4<Float>
     let itemRect: CGRect
     var firstSeamX: CGFloat? = nil
@@ -32,6 +32,7 @@ struct MetalWaveformStroke {
     // Prepared curve bias and S coefficient for each end.
     var fadeShape: SIMD4<Float> = SIMD4(1, 1, 1, 1)
     var fadeCenter: Float? = nil
+    var amplitudeBounds: SIMD2<Float>? = nil
 }
 
 struct MetalWaveformCoordinateSpace: Equatable {
@@ -69,7 +70,8 @@ struct MetalWaveformFrame {
         coordinateSpace == other.coordinateSpace && size == other.size && items == other.items && strokes.count == other.strokes.count && zip(strokes, other.strokes).allSatisfy { a, b in
             a.block === b.block && a.channel == b.channel && a.scale == b.scale && a.translation == b.translation &&
             a.clip == b.clip && a.color == b.color && a.itemRect == b.itemRect && a.firstSeamX == b.firstSeamX &&
-            a.repeatSpacing == b.repeatSpacing && a.lineWidth == b.lineWidth && a.itemCornerRadius == b.itemCornerRadius && a.fadeRange == b.fadeRange && a.fadeShape == b.fadeShape && a.fadeCenter == b.fadeCenter
+            a.repeatSpacing == b.repeatSpacing && a.lineWidth == b.lineWidth && a.itemCornerRadius == b.itemCornerRadius && a.fadeRange == b.fadeRange && a.fadeShape == b.fadeShape && a.fadeCenter == b.fadeCenter &&
+            a.amplitudeBounds == b.amplitudeBounds
         }
     }
 }
@@ -106,7 +108,6 @@ typealias MetalWaveformContainerBase = UIView
 final class MetalWaveformSurface: MetalWaveformContainerBase {
     var didPresent: ((MetalWaveformFrame) -> Void)?
     private let renderer = MetalWaveformRenderView()
-    private var latest: MetalWaveformFrame?
     private var presented: MetalWaveformFrame?
     private let itemClipMask = CAShapeLayer()
     var submittedFrameCount: UInt64 { renderer.submittedFrameCount }
@@ -127,7 +128,6 @@ final class MetalWaveformSurface: MetalWaveformContainerBase {
         renderer.didPresent = { [weak self] frame in
             guard let self else { return }
             self.presented = frame
-            self.applyPresentationGeometry()
             self.didPresent?(frame)
         }
     }
@@ -136,18 +136,13 @@ final class MetalWaveformSurface: MetalWaveformContainerBase {
     override var isFlipped: Bool { true }
     override var isOpaque: Bool { false }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
-    override func layout() { super.layout(); applyPresentationGeometry() }
-    #else
-    override func layoutSubviews() { super.layoutSubviews(); applyPresentationGeometry() }
     #endif
 
     func submit(_ frame: MetalWaveformFrame) {
-        latest = frame
         // Clip at the compositor too. A drawable already queued by Metal can
         // briefly outlive its projection; its old pixels must never escape
         // the current item/channel rectangles while AppKit commits a zoom.
         updateItemClip(frame)
-        applyPresentationGeometry()
         // Only source-detail replacements with identical geometry may wait for
         // a free slot. Zoom, pan and edits present their new vertices in the
         // same transaction as the items and ruler, without bitmap reprojection.
@@ -156,6 +151,15 @@ final class MetalWaveformSurface: MetalWaveformContainerBase {
         } ?? false
         renderer.submit(frame, allowCoalescing: sameGeometry)
     }
+    #if os(macOS)
+    /// AppKit can request a draw while the parent tile moves. Leave the previous
+    /// drawable alone until its replacement is submitted at the new origin.
+    func placeForProjection(_ placement: () -> Void) {
+        renderer.isPlacingProjection = true
+        defer { renderer.isPlacingProjection = false }
+        placement()
+    }
+    #endif
     private var surfaceLayer: CALayer? {
         #if os(macOS)
         layer
@@ -184,14 +188,6 @@ final class MetalWaveformSurface: MetalWaveformContainerBase {
         itemClipMask.path = path
         if surfaceLayer?.mask !== itemClipMask { surfaceLayer?.mask = itemClipMask }
     }
-    private func applyPresentationGeometry() {
-        guard let latest, !latest.isEmpty else { return }
-        let rect = CGRect(origin: .zero, size: latest.size)
-        let disabled = CATransaction.disableActions()
-        CATransaction.setDisableActions(true)
-        defer { CATransaction.setDisableActions(disabled) }
-        if renderer.frame != rect { renderer.frame = rect }
-    }
 }
 
 /// At most two command buffers are in flight. Superseded snapshots are replaced,
@@ -200,6 +196,7 @@ final class MetalWaveformSurface: MetalWaveformContainerBase {
 private final class MetalWaveformRenderView: MTKView, MTKViewDelegate {
     var didPresent: ((MetalWaveformFrame) -> Void)?
     private var lastPresentedSequence: UInt64 = 0
+    private var reportedInitialWaveform = false
     private struct ScheduledPresentation {
         let frame: MetalWaveformFrame
         let drawable: CAMetalDrawable
@@ -216,6 +213,9 @@ private final class MetalWaveformRenderView: MTKView, MTKViewDelegate {
     private var visibleBuffers: MetalWaveformEngine.SourceBuffers = [:]
     private let flights = FrameGate()
     private var rendering = false
+    #if os(macOS)
+    var isPlacingProjection = false
+    #endif
     private var drawableRetryUsed = false
     #if os(macOS)
     private var windowVisibility: NSKeyValueObservation?
@@ -374,6 +374,17 @@ private final class MetalWaveformRenderView: MTKView, MTKViewDelegate {
         if pending != nil { coalescedFrameCount &+= 1 }
         pending = frame
         pendingRequestedAt = TimelineRenderDiagnostics.enabled ? CACurrentMediaTime() : 0
+        let rect = CGRect(origin: .zero, size: frame.size)
+        if self.frame != rect {
+            // AppKit can ask Metal to draw during layout. Replace the pending
+            // projection first and suppress that draw until the frame is set.
+            let disabled = CATransaction.disableActions()
+            CATransaction.setDisableActions(true)
+            rendering = true
+            self.frame = rect
+            rendering = false
+            CATransaction.setDisableActions(disabled)
+        }
         renderLatest()
         if replacesContent && lastPresentedSequence == previousSequence {
             // The new viewport must never display the old viewport's pixels
@@ -383,6 +394,9 @@ private final class MetalWaveformRenderView: MTKView, MTKViewDelegate {
     }
 
     private func renderLatest() {
+        #if os(macOS)
+        guard !isPlacingProjection else { return }
+        #endif
         guard !rendering, window != nil, bounds.width > 0, bounds.height > 0,
               (requiresImmediateSubmission || flights.hasCapacity), let frame = pending, !frame.isEmpty, engine.isReady else { return }
         // MTKView acquires its drawable before invoking draw(in:). Resizing in
@@ -471,6 +485,9 @@ private final class MetalWaveformRenderView: MTKView, MTKViewDelegate {
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 
     func draw(in view: MTKView) {
+        #if os(macOS)
+        guard !isPlacingProjection else { return }
+        #endif
         guard !rendering else { return }
         // AppKit can invalidate the drawable while the timeline projection is
         // unchanged (backing updates, unhide, resizing another panel). A draw
@@ -578,10 +595,16 @@ private final class MetalWaveformRenderView: MTKView, MTKViewDelegate {
         // make nextDrawable block the UI thread for an entire timeout.
         #if !targetEnvironment(simulator)
         let pixelWidth = Double(drawable.texture.width), pixelHeight = Double(drawable.texture.height)
+        let firstWaveform = TimelineRenderDiagnostics.enabled && !reportedInitialWaveform && !frame.strokes.isEmpty
+        if firstWaveform { reportedInitialWaveform = true }
+        let strokeCount = frame.strokes.count
         drawable.addPresentedHandler { presented in
             let timestamp = TimelineRenderDiagnostics.enabled ? presented.presentedTime : 0
             lease.finish(2)
             if TimelineRenderDiagnostics.enabled, timestamp > 0, requestedAt > 0 {
+                if firstWaveform {
+                    NSLog("CatLive initial waveform presented, %ld strokes", strokeCount)
+                }
                 // Read the display timestamp in this callback. Dispatching to
                 // the main queue would measure busy-run-loop delay instead.
                 TimelineRenderDiagnostics.record("metal.present", width: pixelWidth, height: pixelHeight,
@@ -802,6 +825,7 @@ final class MetalWaveformEngine {
         var fadeRange: SIMD4<Float>
         var fadeShape: SIMD4<Float>
         var fadeCenterAndSteps: SIMD4<Float>
+        var amplitudeBounds: SIMD2<Float>
     }
 
     private struct ItemUniforms {
@@ -935,7 +959,8 @@ final class MetalWaveformEngine {
                 colour: stroke.color,
                 corner: SIMD4(stroke.itemRect.width < 20 ? 0 : max(0, stroke.itemCornerRadius), peakColumns ? 2 : stroke.block.isPeakEnvelope ? 1 : 0, Float(stroke.block.channels[stroke.channel].count / 2), Float(drawRange.lowerBound)),
                 fadeRange: stroke.fadeRange, fadeShape: stroke.fadeShape,
-                fadeCenterAndSteps: SIMD4(stroke.fadeCenter ?? stroke.translation.y, Float(detailSteps), Float(columnFrames), Float(columnOffset)))
+                fadeCenterAndSteps: SIMD4(stroke.fadeCenter ?? stroke.translation.y, Float(detailSteps), Float(columnFrames), Float(columnOffset)),
+                amplitudeBounds: stroke.amplitudeBounds ?? SIMD2(-Float.greatestFiniteMagnitude, Float.greatestFiniteMagnitude))
             let pointsPerInstance = stroke.block.isPeakEnvelope ? 2 : 1
             encoder.setVertexBuffer(source.buffer, offset: stroke.block.isPeakEnvelope ? 0 : range.lowerBound * pointsPerInstance * MemoryLayout<SIMD2<Float>>.stride, index: 0)
             encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
@@ -1072,6 +1097,7 @@ final class MetalWaveformEngine {
         float4 fadeRange;
         float4 fadeShape;
         float4 fadeCenterAndSteps;
+        float2 amplitudeBounds;
     };
     float waveformCurve(float position, float bias, float shape) {
         float t = saturate(position);
@@ -1119,6 +1145,7 @@ final class MetalWaveformEngine {
             float fade = waveformFade(left + 0.5 / u.viewportAndWidth.w, u);
             float2 edge = float2(low, high) * u.transform.y + u.transform.w;
             edge = u.fadeCenterAndSteps.x + (edge - u.fadeCenterAndSteps.x) * fade;
+            edge = clamp(edge, u.amplitudeBounds.x, u.amplitudeBounds.y);
             float centerY = (edge.x + edge.y) * 0.5;
             float halfHeight = max(abs(edge.y - edge.x) * 0.5, 0.5 / u.viewportAndWidth.w);
             float y = corner.y * (halfHeight + 1.0 / u.viewportAndWidth.w);
@@ -1153,6 +1180,7 @@ final class MetalWaveformEngine {
             float x = mix(a.x, b.x, (corner.x + (second ? 1.0 : 0.0)) * 0.5);
             float fade = waveformFade(x, u);
             edge = u.fadeCenterAndSteps.x + (edge - u.fadeCenterAndSteps.x) * fade;
+            edge = clamp(edge, u.amplitudeBounds.x, u.amplitudeBounds.y);
             float centerY = (edge.x + edge.y) * 0.5;
             float halfHeight = max((edge.y - edge.x) * 0.5, 0.5 / u.viewportAndWidth.w);
             float y = corner.y * (halfHeight + 1.0 / u.viewportAndWidth.w);
@@ -1173,6 +1201,8 @@ final class MetalWaveformEngine {
         float2 b = mix(start, end, float(sub + 1) / float(steps));
         a.y = u.fadeCenterAndSteps.x + (a.y - u.fadeCenterAndSteps.x) * waveformFade(a.x, u);
         b.y = u.fadeCenterAndSteps.x + (b.y - u.fadeCenterAndSteps.x) * waveformFade(b.x, u);
+        a.y = clamp(a.y, u.amplitudeBounds.x, u.amplitudeBounds.y);
+        b.y = clamp(b.y, u.amplitudeBounds.x, u.amplitudeBounds.y);
         float2 delta = b - a;
         float length = metal::length(delta);
         float2 tangent = length > 0.000001 ? delta / length : float2(1, 0);

@@ -50,7 +50,7 @@ public class RemoteViewTest {
   assertEquals("tempo", commands.get(2).getString("action"));
   assertEquals("tempo", commands.get(3).getString("action"));
  }
- @Test public void pauseUsesYellowOnlyWhilePaused()throws Exception{
+ @Test public void pauseKeepsWhiteBarsOnYellowOnlyWhilePaused()throws Exception{
   connect("director");
   for (boolean playing : new boolean[]{false,true}) {
    app.state.put("playing",playing).put("paused",false);app.refresh();
@@ -58,6 +58,8 @@ public class RemoteViewTest {
   }
   app.state.put("playing",false).put("paused",true);app.refresh();
   assertEquals(RemoteWidgets.YELLOW,((android.graphics.drawable.GradientDrawable)app.pause.getBackground()).getColors()[0]);
+  assertEquals("pause",app.pause.icon);
+  assertEquals(android.graphics.Color.WHITE,app.pause.tint);
  }
  @Test public void footerNoticeExpiresDespiteRepeatedStatePackets()throws Exception{
   connect("director");app.state.put("message","Salvo").put("footerInformation","Ignore Next");app.refresh();assertEquals("Salvo",app.information.getText().toString());

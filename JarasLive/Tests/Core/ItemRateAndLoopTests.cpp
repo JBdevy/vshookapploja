@@ -98,5 +98,17 @@ int main(){try {
     const catlive::MixerSlotSections main(500,1,true), many(500,24);
     check(main.plugins==237 && main.outputs==216 && main.divider==47 && many.outputs==216,
           "Center bypass, show the extra Main button and anchor outputs to the bottom");
+    const catlive::MixerSlotSections sends(500, 8, false, true), mainSends(500, 2, true, true);
+    check(sends.plugins == mainSends.plugins && sends.plugins == many.plugins - catlive::MixerSlotSections::routingDividerHeight,
+          "Make room by raising the FX section and keep By All Fx aligned with Main");
+    check(sends.outputs == mainSends.outputs && sends.outputs > many.outputs,
+          "Keep the Sends headers aligned when reserving space for the Bus divider");
+    const catlive::MixerRoutingRows routing{5, 2};
+    check(routing.rowTop(2) == 51 && routing.rowAt(47, 0) == -1 && routing.rowAt(51, 0) == 2,
+          "A click in the divider must not activate Bus");
+    check(routing.rowAt(0, 2) == -1 && routing.rowAt(9, 2) == 2 && routing.rowAt(0, 3) == 3,
+          "Keep the Bus hit target aligned after scrolling through the divider");
+    check(routing.maximumFirstRow(61) == 3 && routing.maximumFirstRow(70) == 2,
+          "Account for the divider height when exposing the last routing slot");
     std::cout<<"SOURCE_EOF_AUDIO_VIDEO_REPETITION_RATE_BPM_STEPS_SOURCE_SPAN_AND_MIXER_OUTPUT_SECTIONS_OK\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

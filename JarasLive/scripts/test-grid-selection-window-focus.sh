@@ -17,6 +17,7 @@ typography = '// App-owned typography.' + Path('Apple/Shared/Theme.swift').read_
 controls = '@MainActor final class ControlMappings { static let shared = ControlMappings(); var editing: Int?; func handleKey(_ event: NSEvent) -> Bool { false } }'
 sources = [
     'import SwiftUI', typography, controls,
+    'enum LibraryKeyboardArea { static func handle(_ event: NSEvent) -> Bool { false } }',
     section(rows, 'struct EditorSelectionArea:'),
     scroll[scroll.index('enum TimelineLayoutDiagnostics'):scroll.index('protocol SidebarResizeLayoutBoundary')],
     scroll[scroll.index('struct GridRowReveal:'):scroll.index('/// The grid owns these scroll views.')],

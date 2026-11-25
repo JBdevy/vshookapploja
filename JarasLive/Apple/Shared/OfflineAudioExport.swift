@@ -398,7 +398,7 @@ final class OfflineAudioExport {
             link(node,lane,0)
         }
 
-        func addClip(_ clip: AudioClip,track: Track,bus: Bus,start: Double,end: Double,pitchStart: Double? = nil) throws {
+        func addClip(_ clip: AudioClip,track: Track,bus: Bus,start: Double,end: Double,pitchStart: Double? = nil, overlap: Data? = nil) throws {
             if cancellation.cancelled { throw CancellationError() }
             guard clip.muted != true, !clip.isImage, let audio = clip.audioFile ?? track.audioFile else { return }
             let begin = max(start,clip.startTime), finish = min(end,clip.startTime+clip.duration)
@@ -444,7 +444,7 @@ final class OfflineAudioExport {
             // Match the live item chain, including legacy fixed native stages.
             fx.inserted = fx.clipEffectKeys
             var itemEffects: NativeEffectsChain?
-            if clip.phaseInverted == true || (clip.fadeIn ?? 0) > 0 || (clip.fadeOut ?? 0) > 0 || (clip.channelMode ?? 0) != 0 || (clip.normalizationGain ?? 1) != 1 || fx.eqEnabled || fx.compressorEnabled || fx.delayEnabled || fx.reverbEnabled || fx.pitchEnabled == true || fx.limiterEnabled == true || fx.triggerEnabled == true || fx.gateEnabled == true || fx.effectKeys.contains { DrummerPadKind(rawValue: fx.kind(of: $0)) != nil } || fx.hasCreativeEffects || fx.externalPlugins?.isEmpty == false || fx.instances?.isEmpty == false || fx.isEnabled(NativeFXSettings.stemSeparator) {
+            if overlap != nil || clip.phaseInverted == true || (clip.fadeIn ?? 0) > 0 || (clip.fadeOut ?? 0) > 0 || (clip.channelMode ?? 0) != 0 || (clip.normalizationGain ?? 1) != 1 || fx.eqEnabled || fx.compressorEnabled || fx.delayEnabled || fx.reverbEnabled || fx.pitchEnabled == true || fx.limiterEnabled == true || fx.triggerEnabled == true || fx.gateEnabled == true || fx.effectKeys.contains { DrummerPadKind(rawValue: fx.kind(of: $0)) != nil } || fx.hasCreativeEffects || fx.externalPlugins?.isEmpty == false || fx.instances?.isEmpty == false || fx.isEnabled(NativeFXSettings.stemSeparator) {
                 let effects = NativeEffectsChain()
                 itemEffects = effects
                 effectChains.append(effects)
@@ -456,6 +456,7 @@ final class OfflineAudioExport {
                 #endif
                 effects.setSourcePolarity(clip.phaseInverted == true); effects.setSourceGain(clip.normalizationGain ?? 1); effects.setSourceChannelMode(clip.channelMode ?? 0)
                 transportClocks.append((effects, start))
+                effects.setOverlapEnvelope(overlap)
                 effects.configureItemFade(clip, position: begin, sampleTime: (begin - start + Double(preroll) / format.sampleRate) * sourceFormat.sampleRate)
                 itemFades.append((effects, clip, begin, start, sourceFormat.sampleRate))
             } else { engine.connect(gain,to: destination,fromBus: 0,toBus: destinationBus,format: sourceFormat) }
@@ -624,8 +625,9 @@ final class OfflineAudioExport {
                     let bus = try makeBus(fx: track.fx,volume: track.volume,pan: track.pan,muted: track.mute,phaseInverted: (includeHardwareOutputs || printTrackPolarity) && track.phaseInverted == true, automation: track.automation, origin: writer.job.start, forceMuted: !(soloAudible?.contains(track.id) ?? true))
                     buses[clip.id] = bus; capture(bus.output,index: index)
                     if clip.midi != nil { try addMIDI([clip],track: track,bus: bus,start: writer.job.start) }
-                    else { for fragment in song.tempoAudioSegments(clip, sections: tempoSections) {
-                        try addClip(fragment,track: track,bus: bus,start: writer.job.start,end: writer.job.end,pitchStart: clip.startTime)
+                    else { let overlap = NativeEffectsChain.overlapEnvelopes(for: track)[clip.id.uuidString.lowercased()]
+                        for fragment in song.tempoAudioSegments(clip, sections: tempoSections) {
+                        try addClip(fragment,track: track,bus: bus,start: writer.job.start,end: writer.job.end,pitchStart: clip.startTime, overlap: overlap)
                     } }
                 }
             }
@@ -641,9 +643,10 @@ final class OfflineAudioExport {
                 let clips = track.clips.filter { writers[0].job.includes($0) || (track.kind == .click && $0.audioFile == nil) }
                 try addMIDI(clips.filter { $0.midi != nil }, track: track, bus: buses[track.id]!, start: writers[0].job.start)
                 if track.kind == .click { try addClick(track: track, clips: clips, bus: buses[track.id]!, start: writers[0].job.start, end: writers[0].job.end) }
+                let overlaps = NativeEffectsChain.overlapEnvelopes(for: track)
                 for clip in clips where clip.midi == nil && (track.kind == .standard || clip.isProjectionMedia || (track.kind == .click && clip.audioFile != nil)) {
                     for fragment in song.tempoAudioSegments(clip, sections: tempoSections) {
-                        try addClip(fragment,track: track,bus: buses[track.id]!,start: writers[0].job.start,end: writers[0].job.end,pitchStart: clip.startTime)
+                        try addClip(fragment,track: track,bus: buses[track.id]!,start: writers[0].job.start,end: writers[0].job.end,pitchStart: clip.startTime, overlap: overlaps[clip.id.uuidString.lowercased()])
                     }
                 }
             }
@@ -658,6 +661,7 @@ final class OfflineAudioExport {
             let tracksByID = Dictionary(uniqueKeysWithValues: tracks.map { ($0.id, $0) })
             var upstream: [(AVAudioMixerNode, [AVAudioConnectionPoint], [Float?])] = []
             var tapped = Set<ObjectIdentifier>()
+            var routeGains: [(AVAudioMixerNode, AVAudioMixerNode, AVAudioNodeBus, Float)] = []
             for edge in connections {
                 guard let source = buses[edge.source], let target = buses[edge.destination],
                       let track = tracksByID[edge.source] else { continue }
@@ -678,7 +682,11 @@ final class OfflineAudioExport {
                     }
                     signal = mixer
                 }
-                link(signal, target.mix, target.mix.nextAvailableInputBus + AVAudioNodeBus(links.values.flatMap { $0 }.filter { $0.node === target.mix }.count))
+                let port = target.mix.nextAvailableInputBus + AVAudioNodeBus(links.values.flatMap { $0 }.filter { $0.node === target.mix }.count)
+                link(signal, target.mix, port)
+                if mode.isPreFader, let mixer = signal as? AVAudioMixerNode {
+                    routeGains.append((mixer, target.mix, port, Float(track.routing?.sendGain(to: edge.destination) ?? 1)))
+                }
             }
             for (id, destinations) in links where tapped.contains(id) {
                 engine.connect(nodes[id]!, to: destinations, fromBus: 0, format: format)
@@ -688,6 +696,9 @@ final class OfflineAudioExport {
                 for (point, volume) in zip(points, volumes) {
                     if let node = point.node, let volume { mixer.destination(forMixer: node, bus: point.bus)?.volume = volume }
                 }
+            }
+            for (source, target, port, gain) in routeGains {
+                source.destination(forMixer: target, bus: port)?.volume = gain
             }
             for (index,writer) in writers.enumerated() {
                 guard let output = writer.job.track.flatMap({ buses[$0]?.output }) ?? root?.output else { throw AudioExportFailure.incomplete }

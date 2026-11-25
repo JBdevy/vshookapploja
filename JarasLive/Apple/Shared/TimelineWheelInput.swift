@@ -114,6 +114,9 @@ final class TimelineTrackHeightMotion {
         }
         lastInput = now
         guard !running else { return }
+        // Fractional or clamped input can accumulate without invalidating any
+        // viewport or starting a display link.
+        guard requested?.rounded() != current else { return }
         // A wheel can target the project while a teleprompter or FX window
         // remains key. Follow the input's window for display and modal checks.
         window = NSApp?.currentEvent?.window ?? NSApp?.keyWindow
@@ -123,8 +126,6 @@ final class TimelineTrackHeightMotion {
             MainActor.assumeIsolated { NativeSidebarResizeActivity.shared.begin(owner: owner) }
         }
         commit()
-        // Fractional input accumulates without scheduling idle layout work.
-        guard requested?.rounded() != current else { releaseRetainedLayouts(); return }
         if #available(macOS 14.0, *), let host = window?.contentView, window?.isVisible == true {
             let target = TimelineDisplayLinkTarget { [weak self] in self?.tick() }
             let link = host.displayLink(target: target, selector: #selector(TimelineDisplayLinkTarget.tick))
@@ -566,8 +567,11 @@ final class TimelineWheelView: NSView, NativeTimelineInputObserver {
             guard let self, let clip else { return }
             // Native clip hooks normally prepare before movement. Keep the
             // notification fallback synchronous for other NSClipView hosts.
-            if let grid = clip.superview as? GridNativeScrollView, grid.zoomAnchor != nil { return }
-            if self.publishHorizontalOffset(clip.bounds.minX) { clip.documentView?.layoutSubtreeIfNeeded() }
+            let grid = clip.superview as? GridNativeScrollView
+            if grid?.zoomAnchor != nil { return }
+            if self.publishHorizontalOffset(clip.bounds.minX) && grid?.requiresHostedHorizontalLayout?() != false {
+                clip.documentView?.layoutSubtreeIfNeeded()
+            }
         }
     }
     var verticalOffsetChanged: ((CGFloat) -> Void)?
@@ -755,8 +759,9 @@ final class TimelineWheelView: NSView, NativeTimelineInputObserver {
             origin.x = min(max(rect.minX, x), max(rect.minX, rect.maxX - clip.bounds.width))
         }
         if let y { origin.y = min(max(0, y), max(0, document.frame.height - clip.bounds.height)) }
-        if let grid = view as? GridNativeScrollView { grid.prepareHorizontalViewport(at: origin.x) }
-        else if x != nil, publishHorizontalOffset(origin.x) { document.layoutSubtreeIfNeeded() }
+        guard origin != clip.bounds.origin else { return }
+        // The native clip prepares the axis that actually moved in scroll(to:).
+        if x != nil, !(view is GridNativeScrollView), publishHorizontalOffset(origin.x) { document.layoutSubtreeIfNeeded() }
         clip.scroll(to: origin)
         view.reflectScrolledClipView(clip)
     }
@@ -784,9 +789,11 @@ final class TimelineWheelView: NSView, NativeTimelineInputObserver {
             }
         } else if scrollingVertically || (!event.momentumPhase.isEmpty && trackpadVerticalMomentum) {
             stopZoomUpdates()
-            let amount = event.scrollingDeltaY * (event.hasPreciseScrollingDeltas ? 1 : 18)
-            if amount.isFinite, amount != 0, let vertical = views.dropFirst().first {
-                scroll(vertical, y: vertical.contentView.bounds.minY - amount)
+            if event.scrollingDeltaY != 0, let vertical = views.dropFirst().first {
+                // Peeking into the AppKit queue can run the window's layout
+                // observers inside this handler. Let AppKit coalesce display.
+                let amount = event.scrollingDeltaY * (event.hasPreciseScrollingDeltas ? 1 : 18)
+                if amount.isFinite { scroll(vertical, y: vertical.contentView.bounds.minY - amount) }
             }
         } else if shifting || heldLeftWheel {
             takeHorizontalControl(horizontal)

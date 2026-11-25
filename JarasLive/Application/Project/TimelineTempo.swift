@@ -580,8 +580,9 @@ public extension Song {
     /// They do not split project items or create additional media files.
     func tempoAudioSegments(_ clip: AudioClip, sections: [TimelineTempoSection]? = nil) -> [AudioClip] {
         // Printed performances already contain their tempo changes.
-        guard clip.frozenMIDI != true, clip.renderedTiming != true, clip.renderedTempo != true else { return [clip] }
-        guard tempoMarkersAffectAudio else { return [clip] }
+        guard clip.frozenMIDI != true, clip.renderedTiming != true, clip.renderedTempo != true, tempoMarkersAffectAudio else {
+            return clip.elasticFragments([clip])
+        }
         return tempoAudioSegments(clip, program: audioTempoSections(owner: tempoOwner(for: clip), until: clip.startTime + clip.duration, sections: sections))
     }
     func resettingItemRate(_ clip: AudioClip) -> AudioClip {
@@ -631,6 +632,124 @@ public extension Song {
                 result[result.count - 1].duration += segment.duration
             } else { result.append(segment) }
             source += segment.duration * segment.audioRate
+        }
+        return clip.elasticFragments(result)
+    }
+
+    func unwarpedSourceLength(_ clip: AudioClip) -> Double {
+        var base = clip
+        base.elasticPoints = nil
+        return tempoAudioSegments(base).reduce(0.0) { $0 + $1.duration * $1.audioRate }
+    }
+    func elasticReferenceRate(_ clip: AudioClip) -> Double {
+        guard clip.duration > 0 else { return 1 }
+        return unwarpedSourceLength(clip) * (clip.elasticSourceScale ?? 1) / clip.duration
+    }
+    /// Use the same source span for the drag preview and the committed edit.
+    func applyingElasticEdit(to clip: AudioClip, points: [ElasticPoint], durationRatio: Double,
+                             referenceRate: Double) -> AudioClip? {
+        var edited = clip
+        edited.duration *= durationRatio
+        edited.elasticPoints = points
+        if durationRatio != 1 {
+            let unwarpedLength = unwarpedSourceLength(edited)
+            guard unwarpedLength > 0 else { return nil }
+            edited.elasticSourceScale = referenceRate * clip.duration / unwarpedLength
+        }
+        return edited
+    }
+    func elasticSourceProgress(_ clip: AudioClip, at position: Double) -> Double? {
+        var base = clip
+        base.elasticPoints = nil
+        let unwarped = tempoAudioSegments(base)
+        let length = unwarped.reduce(0.0) { $0 + $1.duration * $1.audioRate }
+        guard length > 0, clip.duration > 0 else { return nil }
+        let progress = (position - clip.startTime) / clip.duration
+        let points = clip.elasticPoints ?? []
+        let span = points.firstIndex { $0.position > progress } ?? points.count
+        let left = span == 0 ? ElasticPoint(position: 0, source: 0) : points[span - 1]
+        let right = span == points.count ? ElasticPoint(position: 1, source: 1) : points[span]
+        if points.slopeForElasticSpan(span) != 0 {
+            let length = right.position - left.position
+            let fraction = min(1, max(0, (progress - left.position) / length))
+            return min(right.source, left.source + length * points.speedForElasticSpan(span).distance(at: fraction))
+        }
+        func distance(to time: Double) -> Double {
+            unwarped.reduce(0.0) { $0 + min($1.duration, max(0, time - $1.startTime)) * $1.audioRate }
+        }
+        let start = distance(to: clip.startTime + left.position * clip.duration)
+        let end = distance(to: clip.startTime + right.position * clip.duration)
+        guard end > start else { return left.source }
+        return left.source + (right.source - left.source) * min(1, max(0, (distance(to: position) - start) / (end - start)))
+    }
+}
+
+private extension AudioClip {
+    func elasticFragments(_ base: [AudioClip]) -> [AudioClip] {
+        guard let points = elasticPoints, !points.isEmpty, ElasticPoint.valid(points),
+              !base.isEmpty, duration > 0 else { return base }
+        let sourceLength = base.reduce(0.0) { $0 + $1.duration * $1.audioRate } * (elasticSourceScale ?? 1)
+        guard sourceLength > 0 else { return base }
+        var result: [AudioClip] = []
+        func append(_ template: AudioClip, from: Double, to: Double, source: Double, rate: Double) {
+            guard to > from, rate > 0 else { return }
+            var fragment = template
+            var bytes = id.uuid
+            if !result.isEmpty {
+                withUnsafeMutableBytes(of: &bytes) { values in
+                    let bits = from.bitPattern
+                    for i in 0..<8 { values[i + 8] ^= UInt8(truncatingIfNeeded: bits >> (i * 8)) }
+                    values[6] = (values[6] & 0x0f) | 0x40
+                    values[8] = (values[8] & 0x3f) | 0x80
+                }
+            }
+            fragment.id = UUID(uuid: bytes)
+            fragment.elasticPoints = nil
+            fragment.elasticSourceScale = nil
+            fragment.fadeTimelineStart = startTime; fragment.fadeTimelineDuration = duration
+            fragment.startTime = from; fragment.duration = to - from
+            fragment.playbackRate = rate; fragment.sourceOffset = source
+            fragment.automationSourceOffset = automation == nil ? nil : source
+            if let loopLength, loopLength > 0 {
+                let origin = loopStart ?? 0
+                if source >= origin { fragment.sourceOffset = origin + (source - origin).truncatingRemainder(dividingBy: loopLength) }
+            }
+            result.append(fragment)
+        }
+        var from = startTime, source = sourceOffset, index = 0
+        for (span, point) in (points + [ElasticPoint(position: 1, source: 1)]).enumerated() {
+            let end = startTime + point.position * duration
+            let sourceEnd = sourceOffset + point.source * sourceLength
+            if points.slopeForElasticSpan(span) != 0 {
+                let speed = points.speedForElasticSpan(span)
+                let baseRate = sourceLength / duration
+                let playback = ElasticSpeed(start: speed.start * baseRate, end: speed.end * baseRate)
+                playback.slices(duration: end - from) { a, b, rate in
+                    append(self, from: from + a, to: from + b, source: source, rate: rate)
+                    source += (b - a) * rate
+                }
+            } else {
+                var amount = 0.0
+                for piece in base[index...] {
+                    let finish = min(end, piece.startTime + piece.duration)
+                    amount += max(0, finish - max(from, piece.startTime)) * piece.audioRate
+                    if finish >= end { break }
+                }
+                guard amount > 0 else { return base }
+                let factor = (sourceEnd - source) / amount
+                while index < base.count && from < end {
+                    let piece = base[index], finish = min(end, piece.startTime + piece.duration)
+                    if finish > from {
+                        let rate = piece.audioRate * factor
+                        append(piece, from: from, to: finish, source: source, rate: rate)
+                        source += (finish - from) * rate
+                        from = finish
+                    }
+                    if finish >= piece.startTime + piece.duration { index += 1 } else { break }
+                }
+            }
+            while index < base.count, base[index].startTime + base[index].duration <= end { index += 1 }
+            from = end; source = sourceEnd
         }
         return result
     }
@@ -740,7 +859,9 @@ struct AudioTempoPrograms {
         return value
     }
     mutating func fragments(for clip: AudioClip) -> [AudioClip] {
-        guard affectsAudio, clip.frozenMIDI != true, clip.renderedTiming != true, clip.renderedTempo != true else { return [clip] }
+        guard affectsAudio, clip.frozenMIDI != true, clip.renderedTiming != true, clip.renderedTempo != true else {
+            return clip.elasticFragments([clip])
+        }
         return song.tempoAudioSegments(clip, program: program(for: clip))
     }
 }

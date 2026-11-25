@@ -279,6 +279,9 @@ private final class FXChainEffectNameView: NSTextField {
     private let removeButton = NSButton()
     private let openLibrary: () -> Void
     private var editor: NSView?
+    var hasHostedExternalEditor: Bool {
+        (editor as? NSScrollView)?.documentView?.identifier?.rawValue == "catlive.managedPluginEditor"
+    }
     private var rows: [Row] = []
     private var selection: String?
     private var observation: AnyCancellable?
@@ -442,8 +445,10 @@ private final class FXChainEffectNameView: NSTextField {
             let kind = settings.kind(of: effect)
             let compactControls = kind == "Delay" || kind == "Reverb"
             if kind == "CatSynth" {
-                size = NSSize(width: 1000, height: 610)
-                panel?.contentMinSize = NSSize(width: sidebarWidth + 700, height: 490)
+                let frame = NSRect(x: 0, y: 0, width: 1047, height: 713)
+                let minimum = panel?.contentRect(forFrameRect: frame).size ?? frame.size
+                size = NSSize(width: minimum.width, height: minimum.height - (presetBar.isHidden ? 0 : 36))
+                panel?.contentMinSize = NSSize(width: sidebarWidth + size.width, height: size.height)
             } else {
                 size = NSSize(width: kind == DrummerPadKind.full.rawValue ? 1000 : 740,
                               height: compactControls ? 360 : 560)

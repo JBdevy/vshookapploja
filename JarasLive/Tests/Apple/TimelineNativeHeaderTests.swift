@@ -1,5 +1,4 @@
 setbuf(stdout,nil)
-// Frozen immediate renderer from before the retained-layer migration.
 // This independent reference verifies palette, geometry and text composition.
 extension NativeTimelineHeaderView {
     func drawOriginalForTest(in context: CGContext) {
@@ -8,17 +7,23 @@ extension NativeTimelineHeaderView {
         context.translateBy(x: -tile.minX, y: 0)
         for region in regions {
             let part = region.part
-            let rect = CGRect(x: part.startTime * scale, y: CGFloat(region.lane) * 16,
-                width: max(1, (part.endTime - part.startTime) * scale), height: 16)
+            let rect = CGRect(x: part.startTime * scale, y: CGFloat(region.lane) * 24,
+                width: max(1, (part.endTime - part.startTime) * scale), height: 24)
             guard rect.intersects(tile) else { continue }
             var fill = rect; fill.size.height -= 1
-            context.setFillColor(region.fill); context.fill(fill)
+            context.setFillColor(region.fill)
+            if fill.width >= 5 {
+                context.addPath(CGPath(roundedRect: fill, cornerWidth: 2.5, cornerHeight: 2.5, transform: nil))
+                context.fillPath()
+            } else { context.fill(fill) }
             if let identifier = TimelineStaticText.label(region.identifier, style: .regionIdentifier, displayScale: displayScale), rect.width >= identifier.width + 8 {
                 context.saveGState(); context.clip(to: rect)
+                let y = ((rect.midY - identifier.size.height / 2) * identifier.rasterScale).rounded() / identifier.rasterScale
                 NativeTimelineHeaderText.draw(identifier.image, size: identifier.size,
-                    at: CGPoint(x: rect.maxX - 4 - identifier.width - 1, y: rect.minY + 2), in: context)
+                    at: CGPoint(x: rect.maxX - 4 - identifier.width - 1, y: y), in: context)
                 drawName(region.name, rect: CGRect(x: rect.minX, y: rect.minY,
-                    width: max(0, rect.width - identifier.width - 8), height: rect.height), color: 0, centered: false, context: context)
+                    width: max(0, rect.width - identifier.width - 8), height: rect.height),
+                    color: 0, centered: false, fontSize: 12, context: context)
                 context.restoreGState()
             }
         }
@@ -28,7 +33,8 @@ extension NativeTimelineHeaderView {
                 context.saveGState()
                 context.setStrokeColor(item.colors.stem)
                 context.setLineWidth(0.5 / displayScale); context.setLineDash(phase: 0, lengths: item.tempo ? [2, 3] : [])
-                context.move(to: CGPoint(x: x, y: item.top + markerLaneHeight)); context.addLine(to: CGPoint(x: x, y: tile.height)); context.strokePath()
+                context.move(to: CGPoint(x: x, y: item.top + (item.tempo ? 16 : 24)))
+                context.addLine(to: CGPoint(x: x, y: tile.height)); context.strokePath()
                 context.restoreGState()
             }
             guard item.rect.intersects(tile) else { continue }
@@ -51,13 +57,14 @@ extension NativeTimelineHeaderView {
                     context.addPath(path); context.setStrokeColor(linkedOutlineColor); context.setLineWidth(1.2); context.strokePath()
                 } else { context.fill(rect) }
             }
-            drawName(item.label, rect: rect, color: item.tempo ? 0xffffff : 0, centered: item.tempo, context: context)
+            drawName(item.label, rect: rect, color: item.tempo ? 0xffffff : 0, centered: item.tempo,
+                fontSize: item.tempo ? 9 : 12, context: context)
         }
         // These boundaries previously overlaid the entire pinned header/body.
         for region in regions {
             let left = region.part.startTime * scale, right = region.part.endTime * scale
             guard right >= tile.minX - 6, left <= tile.maxX + 6 else { continue }
-            let top = CGFloat(region.lane + 1) * 16
+            let top = CGFloat(region.lane + 1) * 24
             context.saveGState()
             let path = CGMutablePath()
             for edge in [left, right] {
@@ -69,18 +76,19 @@ extension NativeTimelineHeaderView {
             context.restoreGState()
         }
     }
-    private func drawName(_ name: String, rect: CGRect, color: UInt32, centered: Bool, context: CGContext) {
+    private func drawName(_ name: String, rect: CGRect, color: UInt32, centered: Bool, fontSize: CGFloat, context: CGContext) {
         let available = rect.width - 8
         guard available >= 10, rect.intersects(tile) else { return }
-        let measure: (String) -> CGFloat = { NativeTimelineHeaderText.label($0, color: color, scale: self.displayScale)?.width ?? 0 }
-        let metrics = TimelineNameMetrics.metrics(name, measure: measure)
+        let measure: (String) -> CGFloat = { NativeTimelineHeaderText.label($0, color: color, scale: self.displayScale, fontSize: fontSize)?.width ?? 0 }
+        let metrics = TimelineNameMetrics.metrics(name, fontSize: fontSize, measure: measure)
         guard centered || rect.minX + 4 + min(available, metrics.fullWidth) >= tile.minX,
               let displayed = metrics.fitting(name, width: available, measure: measure),
-              let label = NativeTimelineHeaderText.label(displayed, color: color, scale: displayScale) else { return }
+              let label = NativeTimelineHeaderText.label(displayed, color: color, scale: displayScale, fontSize: fontSize) else { return }
         context.saveGState()
         context.addPath(CGPath(roundedRect: rect, cornerWidth: 3, cornerHeight: 3, transform: nil)); context.clip()
-        let point = centered ? CGPoint(x: rect.midX - label.width / 2 - 1, y: rect.midY - label.size.height / 2)
-            : CGPoint(x: rect.minX + 3, y: rect.minY + 2)
+        let y = rect.midY - label.size.height / 2
+        let point = CGPoint(x: centered ? rect.midX - label.width / 2 - 1 : rect.minX + 3,
+                            y: centered ? y : (y * label.rasterScale).rounded() / label.rasterScale)
         NativeTimelineHeaderText.draw(label.image, size: label.size, at: point, in: context)
         context.restoreGState()
     }
@@ -124,7 +132,7 @@ extension NativeTimelineHeaderView {
                 lane: lanes.lanes[$0.id] ?? 0, edgePadding: $0.id == parent.id ? 0 : 10,
                 selected: $0.id == region.id, pinned: false, input: RegionRightClick(edit: {}))
         }
-        return .init(song: song, lanes: lanes, parentIDs: [parent.id], regionTargets: targets,
+        return .init(song: song, lanes: lanes, rulerSections: song.tempoSections(until: song.timelineScrollEnd), parentIDs: [parent.id], regionTargets: targets,
             edit: { edits.append($0.id) }, delete: { deletes.append($0) },
             seek: { seeks.append($0.id) }, move: { moved.append($0) })
     }
@@ -136,6 +144,14 @@ extension NativeTimelineHeaderView {
     let labels = Dictionary(uniqueKeysWithValues: header.markersForTest.map { ($0.0, $0.2) })
     precondition(labels[section.id] == "CHORUS" && labels[linked.id] == "0st  VERSO ÁÉÇÃO" && labels[tempo.id] == "128  3/4",
         "section casing, source pitch and tempo formatting remain model-defined")
+    let flags = Dictionary(uniqueKeysWithValues: header.markersForTest.map { ($0.0, $0.1) })
+    precondition(flags[tied.id]!.minY == 25 && flags[tied.id]!.height == 22)
+    precondition(flags[tempo.id]!.minY == 49 && flags[tempo.id]!.height == 14)
+    precondition(header.markerForTest(tied.id)?.clickBounds.height == 24)
+    precondition(header.markerForTest(tempo.id)?.clickBounds.height == 16)
+    let small = NativeTimelineHeaderText.label("Chorus", color: 0, scale: 2, fontSize: 9)!
+    let enlarged = NativeTimelineHeaderText.label("Chorus", color: 0, scale: 2, fontSize: TimelineHeaderBands.nameFontSize)!
+    precondition(enlarged.width > small.width && enlarged.size.height > small.size.height)
     // Draw the real native implementation into a bitmap, including every flag
     // shape and label path. Sample interiors independently of antialiasing.
     let pixels = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(header.drawingForTest.bounds.width), pixelsHigh: 240,
@@ -154,8 +170,12 @@ extension NativeTimelineHeaderView {
     }
     precondition(pixel(200, 8) == 0x705264 && pixel(470, 8) == 0x885965,
         "region fills retain their exact chosen colors")
-    precondition(pixel(62, 28) == 0x4080c0 && pixel(343, 40) == (JarasInterfaceTheme.current == .dark ? JarasTheme.displayHex : 0x202020),
-        "normal flags and BPM display retain their original fills and lane positions")
+    precondition(pixel(62, 36) == 0x4080c0 && pixel(343, 56) == (JarasInterfaceTheme.current == .dark ? JarasTheme.displayHex : 0x202020),
+        "normal flags and BPM display retain their original fills in the resized header")
+    if CommandLine.arguments.contains("--bands-only") {
+        print("NATIVE_HEADER_EXPANDED_REGION_AND_MARKER_BANDS_OK")
+        exit(0)
+    }
     try! pixels.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: "/tmp/catlive-native-header-fixture.png"))
     func compareRetainedPixels(scale: CGFloat, offset: CGFloat, backing: CGFloat, name: String) {
         header.project(scale: scale, viewport: CGRect(x: offset, y: 0, width: 700, height: 240),
@@ -174,9 +194,8 @@ extension NativeTimelineHeaderView {
         var changed = 0, active = 0, maxDifference = 0, differenceTotal = 0
         for index in stride(from: 0, to: bytes.count, by: 4) {
             if bytes[index + 3] != 0 || original[index + 3] != 0 { active += 1 }
-            if (0..<4).contains(where: { bytes[index + $0] != original[index + $0] }) {
-                changed += 1
-            }
+            guard (0..<4).contains(where: { bytes[index + $0] != original[index + $0] }) else { continue }
+            changed += 1
             for channel in 0..<4 {
                 let difference = abs(Int(bytes[index + channel]) - Int(original[index + channel]))
                 maxDifference = max(maxDifference, difference); differenceTotal += difference
@@ -205,7 +224,7 @@ extension NativeTimelineHeaderView {
                 precondition(alpha(column) > 0 && alpha(column - 1) == 0 && alpha(column + 1) == 0,
                     "Region edges and marker stems occupy one device column at either backing scale")
             }
-            for point in [CGPoint(x: 200, y: 8), CGPoint(x: 470, y: 8), CGPoint(x: 62, y: 28), CGPoint(x: 343, y: 40)] {
+            for point in [CGPoint(x: 200, y: 8), CGPoint(x: 470, y: 8), CGPoint(x: 62, y: 36), CGPoint(x: 343, y: 56)] {
                 let index = Int(point.y * backing) * image.bytesPerRow + Int(point.x * backing) * 4
                 precondition(bytes[index..<(index + 4)] == original[index..<(index + 4)],
                     "retained region/flag/BPM fills keep exact RGBA values at the original positions")
@@ -451,7 +470,7 @@ private final class HeaderTestDocument: NSView {
         var edits: [UUID] = [], seeks: [UUID] = [], moves: [TimelineMarker] = [], regionEdits = 0
         var resizeEvents: [(CGFloat, Bool, Int)] = []
         let regionInput = RegionRightClick(edit: { regionEdits += 1 }, drag: { resizeEvents.append(($0, $1, $2)) })
-        let config = NativeTimelineHeaderConfiguration(song: song, lanes: RegionLanes(parts: [region]), parentIDs: [],
+        let config = NativeTimelineHeaderConfiguration(song: song, lanes: RegionLanes(parts: [region]), rulerSections: song.tempoSections(until: song.timelineScrollEnd), parentIDs: [],
             regionTargets: [.init(id: region.id, start: region.startTime, end: region.endTime, lane: 0,
                 edgePadding: 10, selected: false, pinned: false, input: regionInput)],
             edit: { edits.append($0.id) }, delete: { _ in }, seek: { seeks.append($0.id) }, move: { moves.append($0) })
@@ -578,7 +597,7 @@ private final class MarkerInputTestWindow: NSWindow {
     var song=Song(id:UUID(),name:"Marker input mutations",duration:5000,bpm:120,tracks:[],parts:[],markers:markers)
     var edits:[UUID]=[],deletes:[UUID]=[],seeks:[UUID]=[], editedNames:[String]=[]
     func configure() {
-        header.configure(.init(song:song,lanes:RegionLanes(parts:[]),parentIDs:[],regionTargets:[],
+        header.configure(.init(song:song,lanes:RegionLanes(parts:[]), rulerSections: song.tempoSections(until: song.timelineScrollEnd), parentIDs:[],regionTargets:[],
             edit:{edits.append($0.id); editedNames.append($0.name)},delete:{deletes.append($0)},seek:{seeks.append($0.id)},move:{_ in}))
     }
     configure()
@@ -708,7 +727,7 @@ MainActor.assumeIsolated { runMarkerInputMutationTests() }
     let header = NativeTimelineHeaderView()
     document.addSubview(header)
     var edited: UUID?, deleted: UUID?, sought: UUID?
-    header.configure(.init(song: song, lanes: RegionLanes(parts: []), parentIDs: [], regionTargets: [],
+    header.configure(.init(song: song, lanes: RegionLanes(parts: []), rulerSections: song.tempoSections(until: song.timelineScrollEnd), parentIDs: [], regionTargets: [],
         edit: { edited = $0.id }, delete: { deleted = $0 }, seek: { sought = $0.id }, move: { _ in }))
     // Warm the largest projected set once. Subsequent zoom frames represent
     // different logical markers using the exact same attached native views.
@@ -784,7 +803,7 @@ MainActor.assumeIsolated { runDenseTempoHeaderTests() }
     let header = NativeTimelineHeaderView()
     var invoked = 0
     func configuration(_ generation: Int) -> NativeTimelineHeaderConfiguration {
-        .init(song: song, lanes: RegionLanes(parts: []), parentIDs: [], regionTargets: [],
+        .init(song: song, lanes: RegionLanes(parts: []), rulerSections: song.tempoSections(until: song.timelineScrollEnd), parentIDs: [], regionTargets: [],
             edit: { _ in invoked = generation }, delete: { _ in invoked = generation },
             seek: { _ in invoked = generation }, move: { _ in invoked = generation })
     }
@@ -810,7 +829,7 @@ MainActor.assumeIsolated { testResizeKeepsFreshHeaderCommands() }
     let header = NativeTimelineHeaderView()
     var moved = 0, edited = 0, sought = 0
     func configuration(locked: Bool) -> NativeTimelineHeaderConfiguration {
-        .init(song: song, lanes: RegionLanes(parts: []), parentIDs: [], regionTargets: [],
+        .init(song: song, lanes: RegionLanes(parts: []), rulerSections: song.tempoSections(until: song.timelineScrollEnd), parentIDs: [], regionTargets: [],
             edit: { _ in edited += 1 }, delete: { _ in }, seek: { _ in sought += 1 },
             move: { _ in moved += 1 }, movementLocked: locked)
     }
@@ -849,7 +868,7 @@ MainActor.assumeIsolated { testMovementLockCancelsMarkerPreviewAndKeepsEditors()
         tracks: [], parts: [], markers: markers)
     let header = NativeTimelineHeaderView()
     var edited: UUID?, sought: UUID?
-    header.configure(.init(song: song, lanes: RegionLanes(parts: []), parentIDs: [], regionTargets: [],
+    header.configure(.init(song: song, lanes: RegionLanes(parts: []), rulerSections: song.tempoSections(until: song.timelineScrollEnd), parentIDs: [], regionTargets: [],
         edit: { edited = $0.id }, delete: { _ in }, seek: { sought = $0.id }, move: { _ in }))
     for scale: CGFloat in [1, 2, 4, 32, 128] {
         header.project(scale: scale, viewport: CGRect(x: 0, y: 0, width: 700, height: 240),

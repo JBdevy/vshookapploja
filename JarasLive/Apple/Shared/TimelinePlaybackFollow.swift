@@ -92,10 +92,12 @@ final class TimelinePlaybackFollowView: NSView {
     private var policy = TimelinePlaybackFollowPolicy()
     private var needsApply = false
     private var pending: UUID?
+    private var applying = false
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-    func update(position: Double?, pixelsPerSecond: CGFloat, contentWidth: CGFloat, source: String) {
+    func update(position: Double?, pixelsPerSecond: CGFloat, contentWidth: CGFloat, source: String,
+                onDisplayTick: Bool = false) {
         let next = Sample(position: position, pixelsPerSecond: pixelsPerSecond, contentWidth: contentWidth, source: source)
         guard sample != next || needsApply else { return }
         sample = next
@@ -109,7 +111,12 @@ final class TimelinePlaybackFollowView: NSView {
         }
         TimelineFollowCadenceDiagnostics.requested()
         needsApply = true
-        scheduleApply()
+        if onDisplayTick && !applying {
+            // The native display timer is outside SwiftUI's view update.
+            // Move the viewport in the same display pass as its needle.
+            pending = nil
+            applyLatestSample()
+        } else { scheduleApply() }
     }
 
     override func viewDidMoveToWindow() {
@@ -149,6 +156,9 @@ final class TimelinePlaybackFollowView: NSView {
     }
 
     private func applyLatestSample() {
+        guard !applying else { return }
+        applying = true
+        defer { applying = false }
         if horizontalScroll?.permitsPlaybackFollow != true { horizontalScroll?.setPlaybackFollowing(false) }
         guard needsApply, let sample, sample.position != nil, let window,
               window.attachedSheet == nil, !NativeTimelineInputGate.shared.isBlocked(window),
@@ -184,8 +194,7 @@ final class TimelinePlaybackFollowView: NSView {
         policy = nextPolicy
         needsApply = false
         scroll.setPlaybackFollowing(x > clip.documentRect.minX && x < sample.contentWidth - viewport.width)
-        clip.scroll(to: CGPoint(x: x, y: viewport.minY))
-        scroll.reflectScrolledClipView(clip)
+        scroll.scrollToPreparedHorizontalOrigin(CGPoint(x: x, y: viewport.minY))
         TimelineFollowCadenceDiagnostics.applied()
     }
 }

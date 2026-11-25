@@ -1,6 +1,15 @@
 import AppKit
 import SwiftUI
 
+final class TimelineClipView: NSClipView {}
+final class GridNativeScrollView: NSScrollView {
+    var logicalDocumentWidth: CGFloat?
+    var prepareHorizontalScroll: ((CGFloat) -> Bool)?
+    var prepareHostedVerticalScroll: ((CGFloat) -> Bool)?
+    func pauseManualPlaybackFollow() {}
+    func prepareHorizontalViewport(at x: CGFloat) {}
+}
+
 // INSERT_PLAYLIST_CLICK_VIEW
 
 struct PlaylistWheelFixture: View {

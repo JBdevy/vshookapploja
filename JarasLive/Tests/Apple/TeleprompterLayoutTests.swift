@@ -16,17 +16,20 @@ MainActor.assumeIsolated {
         .init(index: index, text: "Minha letra\nSegunda linha", chords: "Cm / G7", song: "Minha música", queued: "Na fila",
               progress: 0.42, style: .init(), preview: preview,
               blocks: [.init(id: UUID(), name: "Repertório", color: 0x4488ff,
-                             rows: [.init(id: UUID(), name: "Primeira música", color: 0x44ff88, duration: 123),
-                                    .init(id: UUID(), name: "Segunda música", color: 0xff4488, duration: 234)])], settings: settings)
+                             rows: [.init(id: UUID(), name: "Primeira música",
+                                          color: settings.previewNameColor(region: 0x44ff88, setlist: 0xffffff), duration: 123),
+                                    .init(id: UUID(), name: "Segunda música",
+                                          color: settings.previewNameColor(region: 0xff4488, setlist: 0xffffff), duration: 234)])], settings: settings)
     }
-    func pixels(_ content: DAWRemoteTeleprompter, expired: Bool = false) -> Data {
+    func pixels(_ content: DAWRemoteTeleprompter, expired: Bool = false,
+                size: CGSize = CGSize(width: 800, height: 600), inspect: (NSBitmapImageRep) -> Void = { _ in }) -> Data {
         let view = NSHostingView(rootView: TeleprompterProjectionLayout(content: content, fullscreen: false,
             timerValue: { ("00 : 12 : 34", 1, expired) }, media: {
                 // Nonuniform media makes the actual scale transform observable.
                 HStack(spacing: 0) { Color.blue; Color.red; Color.green }.frame(width: 300, height: 200)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }))
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600), styleMask: [.borderless], backing: .buffered, defer: false)
+        let window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = view
         window.orderFrontRegardless()
@@ -34,6 +37,7 @@ MainActor.assumeIsolated {
         view.layoutSubtreeIfNeeded()
         let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds)!
         view.cacheDisplay(in: view.bounds, to: bitmap)
+        inspect(bitmap)
         let data = Data(bytes: bitmap.bitmapData!, count: bitmap.bytesPerRow * bitmap.pixelsHigh)
         window.orderOut(nil); window.contentView = nil; window.close()
         return data
@@ -123,6 +127,43 @@ MainActor.assumeIsolated {
     }
     var base = TeleprompterSettings()
     base.songNameEnabled = true; base.progressEnabled = true
+    do {
+        var settings = base
+        settings.clockEnabled = false; settings.localClockEnabled = false
+        settings.showsLyricsWithPreview = true
+        for size in [CGSize(width: 800, height: 400), CGSize(width: 400, height: 800)] {
+            let portrait = size.height > size.width
+            let original = fixture(settings, preview: true)
+            var width = 0, height = 0, stride = 0, bytesPerPixel = 0
+            let reference = pixels(original, size: size) { bitmap in
+                width = bitmap.pixelsWide; height = bitmap.pixelsHigh
+                stride = bitmap.bytesPerRow; bytesPerPixel = bitmap.bitsPerPixel / 8
+            }
+            func changedHalves(_ candidate: Data) -> [Int] {
+                precondition(reference.count == candidate.count)
+                var counts = [0, 0]
+                for y in 0..<height {
+                    for x in 0..<width {
+                        let i = y * stride + x * bytesPerPixel
+                        if reference[i] != candidate[i] || reference[i + 1] != candidate[i + 1] || reference[i + 2] != candidate[i + 2] {
+                            counts[portrait ? 2 * y / height : 2 * x / width] += 1
+                        }
+                    }
+                }
+                return counts
+            }
+            var lyricSettings = settings
+            lyricSettings.textColor = 0xff00ff
+            var lyric = original
+            lyric.settings = lyricSettings
+            let lyricChanges = changedHalves(pixels(lyric, size: size))
+            precondition(lyricChanges[0] > 0 && lyricChanges[1] == 0, "Lyrics must use the leading half at \(size): \(lyricChanges)")
+            var preview = original
+            preview.blocks[0].rows[0].color = 0xffffff
+            let previewChanges = changedHalves(pixels(preview, size: size))
+            precondition(previewChanges[0] == 0 && previewChanges[1] > 0, "Preview must use the trailing half at \(size): \(previewChanges)")
+        }
+    }
     base.textCase = "original"
     for index in 1...2 {
         var content = fixture(base, index: index, preview: true)
@@ -172,8 +213,9 @@ MainActor.assumeIsolated {
     var checked = 0
     for index in 1...2 {
         for field in TPSettingField.all {
-            let before = base
-            var after = base
+            var before = base
+            if field.id == "previewRegionColor" { before.previewColorMode = "user" }
+            var after = before
             let preview = field.id.hasPrefix("preview") || field.id == "ignorePreview"
             let expired = field.id == "clockExpiredColor"
             // These two settings act on the decoder/content selection, not on
@@ -187,6 +229,7 @@ MainActor.assumeIsolated {
             }
             if field.id == "textCase" { after.textCase = "uppercase" }
             if field.id == "localClockPosition" { after.localClockPosition = "left" }
+            if field.id == "previewRegionColorSource" { after.previewColorMode = "setlist" }
             precondition(pixels(fixture(before, index: index, preview: preview), expired: expired) != pixels(fixture(after, index: index, preview: preview), expired: expired),
                          "TP-\(index): \(field.id) must change the real display")
             checked += 1

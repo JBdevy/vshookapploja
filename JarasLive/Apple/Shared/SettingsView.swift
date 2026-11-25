@@ -202,7 +202,7 @@ struct SettingsView: View {
         .sheet(isPresented: $signingIn) {
             LoginView(auth: auth, backend: backend, offersTrial: false, onAuthorized: { signingIn = false }).frame(width: 550, height: 620)
         }
-        .onDisappear { mappings.editing = nil }
+        .onDisappear { mappings.endEditing() }
         .task(id: section) { if section == .account { await auth.refreshDevices() } }
         .alert("Remover dispositivo?", isPresented: Binding(get: { pendingDevice != nil }, set: { if !$0 { pendingDevice = nil } }), presenting: pendingDevice) { device in
             Button("Cancelar", role: .cancel) { pendingDevice = nil }

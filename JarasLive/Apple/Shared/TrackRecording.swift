@@ -84,7 +84,12 @@ private final class CaptureWriter: @unchecked Sendable {
         take.droppedFramesAtStart = ring.droppedFrames
         return take
     }
-    func setInitialPosition(_ position: Double) { for take in takes { take.position = position } }
+    func setInitialPosition(_ position: Double) -> [UUID] {
+        takes.map { take in
+            take.position = position
+            return take.target.id
+        }
+    }
     func changeTargets(_ targets: [CaptureTarget], position: Double, completion: @escaping @Sendable ([CapturedItem], String?) -> Void) {
         queue.async {
             self.drain()
@@ -183,7 +188,11 @@ private final class CaptureWriter: @unchecked Sendable {
                 take.overview.endFrame()
             }
         }
-        try take.file?.write(from: take.buffer)
+        if let file = take.file {
+            JarasBeginAudioDiskIO()
+            defer { JarasEndAudioDiskIO() }
+            try file.write(from: take.buffer)
+        }
         try take.waveform.append(take.buffer)
         take.writtenFrames += Int64(kept)
     }
@@ -318,7 +327,7 @@ private final class CaptureWriter: @unchecked Sendable {
             let position = self.recordingPosition(at: timestamp)
             self.midiTakes[track]?.receive(source: Int32.min, status: status, number: number, value: value, position: position)
         }
-        selectionObservation = show.$mixerTrackSelection.removeDuplicates().sink { [weak self] selection in
+        selectionObservation = show.mixerTrackSelectionChanges.removeDuplicates().sink { [weak self] selection in
             self?.selectionChanged(selection)
         }
         // Rebinding a suspended tab must restore its manual input monitoring
@@ -339,12 +348,14 @@ private final class CaptureWriter: @unchecked Sendable {
         let region = song?.parts.first { $0.id == transport.regionId }
         let boundary = region?.parentRegionID.flatMap { id in song?.parts.first { $0.id == id } }?.endTime ?? region?.endTime
         #if os(macOS)
-        let elapsed = max(0, ProcessInfo.processInfo.systemUptime - show.timelinePlaybackSampleTime)
+        let now = ProcessInfo.processInfo.systemUptime
+        return TimelinePlaybackPresentation(transport: transport, elapsed: max(0, now - show.timelinePlaybackSampleTime),
+            songDuration: song?.duration ?? 0, mainBoundary: boundary,
+            audibleMainPosition: transport.playing ? show.audioPresentationPosition(0, now) : nil).mainPosition
         #else
-        let elapsed = 0.0
-        #endif
-        return TimelinePlaybackPresentation(transport: transport, elapsed: elapsed,
+        return TimelinePlaybackPresentation(transport: transport, elapsed: 0,
             songDuration: song?.duration ?? 0, mainBoundary: boundary).mainPosition
+        #endif
     }
     struct MIDIPreviewPass {
         let session: UUID
@@ -511,6 +522,9 @@ private final class CaptureWriter: @unchecked Sendable {
     private var previewSession = UUID()
     private var lastPosition = 0.0
     private var lastTime = 0.0
+    private var lastPlaybackAdvance = 0.0
+    private var lastJumpSerial: UInt64?
+    private var lastRepeatWrapSerial: UInt64 = 0
     var defaultInputPatch: OutputPatch { OutputPatch(firstChannel: 1, channelCount: min(2, max(1, inputChannels))) }
     var inputChannels: Int { AudioDeviceSettings.shared.inputDevice?.channels ?? 0 }
     private func configureInput(allowCaptureSetup: Bool = false) throws {
@@ -903,7 +917,13 @@ private final class CaptureWriter: @unchecked Sendable {
         let countMeter = !transport.playing && !transport.subPlay.playing &&
             (transport.editPosition ?? transport.position) <= 0.000001 ? show.current?.tempoSection(at: 0) : nil
         let songID = transport.songId
-        recordingCycle = transport.loop.enabled && transport.multiLoop == nil ? RecordingCycle(show.selectedLoopArea()) : nil
+        let sessionID = show.projectSessionID
+        let recordingProject = show.snapshot.project.id
+        func requestStillCurrent() -> Bool {
+            project == recordingProject && show.projectSessionID == sessionID && show.snapshot.transport.songId == songID &&
+                (!transport.playing || show.snapshot.transport.playing) && show.canControl()
+        }
+        recordingCycle = RecordingCycle(loop: transport.loop)
         if let cycle = recordingCycle {
             let cursor = transport.playing ? transport.position : transport.editPosition ?? transport.position
             if cursor >= cycle.range.upperBound {
@@ -920,7 +940,7 @@ private final class CaptureWriter: @unchecked Sendable {
                     let available = await Task.detached(priority: .userInitiated) {
                         AudioDestinationSpace.availableBytes(at: destination)
                     }.value
-                    guard self.project == show.snapshot.project.id, show.canControl(),
+                    guard requestStillCurrent(),
                           AudioDestinationSpace.confirm(at: destination, availableBytes: available) else {
                         busy = false
                         return
@@ -929,36 +949,51 @@ private final class CaptureWriter: @unchecked Sendable {
                 let audio = projectAudio ?? StemAudioPlayback.shared
                 audio.setRecordingItemTracks(Set(tracks.map(\.id)))
                 if !audioTracks.isEmpty { try await startAudioCapture(tracks: audioTracks) }
-                guard self.project == show.snapshot.project.id, show.canControl() else { abortCapturePreparation(); busy = false; return }
+                guard requestStillCurrent() else { abortCapturePreparation(); busy = false; return }
                 if !show.isPlaying { try await show.prepareRecordingPlayback() }
-                guard self.project == show.snapshot.project.id, show.canControl() else {
+                if show.snapshot.transport.playing { show.tick() }
+                guard requestStillCurrent() else {
                     abortCapturePreparation(); busy = false; return
                 }
                 let startTransport = show.snapshot.transport
+                // The capture writer can yield while being prepared. Use the
+                // loop bounds and transport sample that are active at punch-in.
+                recordingCycle = RecordingCycle(loop: startTransport.loop)
                 startPosition = startTransport.playing ? startTransport.position : startTransport.editPosition ?? startTransport.position
                 recordingSong = startTransport.songId
-                // Allocate names, recording lanes and previews before the first
-                // count-in click. The launch path only arms the prepared takes.
-                updateMIDITargets(tracks.filter { $0.recordingMode == .midi }, position: startPosition)
-                updateSilentTakes(audioTracks.filter { !$0.recordsOutput && !hasRecordingInput($0) }, at: startPosition)
-                var recordingHost: UInt64 = 0
+                @MainActor func prepareItems() {
+                    updateMIDITargets(tracks.filter { $0.recordingMode == .midi }, position: startPosition)
+                    updateSilentTakes(audioTracks.filter { !$0.recordsOutput && !hasRecordingInput($0) }, at: startPosition)
+                }
+                // With Play already running, tie the input gate to the same
+                // sample that supplied the timeline position. With count-in,
+                // prepare the items before scheduling its first click.
+                let punchInTime = startTransport.playing ? show.timelinePlaybackSampleTime : nil
+                if punchInTime == nil { prepareItems() }
+                var recordingHost = punchInTime.map { AVAudioTime.hostTime(forSeconds: $0) } ?? 0
                 if let countMeter, let countSong = show.current, !show.isPlaying, show.snapshot.transport.songId == songID,
                    startPosition <= 0.000001 {
-                    guard let host = try await countIn(countMeter, song: countSong), self.project == show.snapshot.project.id,
-                          show.canControl(), show.snapshot.transport.songId == recordingSong,
+                    guard let host = try await countIn(countMeter, song: countSong), requestStillCurrent(),
                           (show.snapshot.transport.editPosition ?? show.snapshot.transport.position) == startPosition,
                           !show.isPlaying else { abortCapturePreparation(); busy = false; return }
                     recordingHost = host
                 }
                 let now = mach_absolute_time()
                 let delay = recordingHost > now ? AVAudioTime.seconds(forHostTime: recordingHost - now) : 0
-                midiStartTime = ProcessInfo.processInfo.systemUptime + delay
+                midiStartTime = punchInTime ?? (ProcessInfo.processInfo.systemUptime + delay)
                 lastPosition = startPosition; lastTime = midiStartTime
-                writer?.start(atHostTime: recordingHost)
+                lastPlaybackAdvance = show.timelinePlaybackAdvance
+                lastJumpSerial = startTransport.sectionJumpSerial
+                lastRepeatWrapSerial = startTransport.repeatWrapSerial ?? 0
+                if let writer {
+                    anchorCaptureWriter(writer, at: startPosition)
+                    writer.start(atHostTime: recordingHost)
+                }
                 for output in outputWriters.values {
-                    output.setInitialPosition(startPosition)
+                    anchorCaptureWriter(output, at: startPosition)
                     output.start(atHostTime: recordingHost)
                 }
+                if punchInTime != nil { prepareItems() }
                 recording = true
                 if !show.snapshot.transport.playing {
                     if recordingHost != 0 {
@@ -999,6 +1034,12 @@ private final class CaptureWriter: @unchecked Sendable {
         if !inputs.isEmpty { try await startInputAudioCapture(tracks: inputs) }
         for track in tracks where track.recordsOutput && outputWriters[track.id] == nil { try await startOutputCapture(track) }
     }
+    private func anchorCaptureWriter(_ writer: CaptureWriter, at position: Double) {
+        for id in writer.setInitialPosition(position) {
+            RecordingLaneLayout.shared.update(id, start: position)
+            LiveRecordingPreview.shared.takes[id]?.start = position
+        }
+    }
     private func startOutputCapture(_ track: Track) async throws {
         guard let show, let directory else { return }
         let audio = projectAudio ?? StemAudioPlayback.shared
@@ -1017,7 +1058,7 @@ private final class CaptureWriter: @unchecked Sendable {
             output.finish(start: position) { _, _ in }
             throw ProjectError.invalid("The destination project is no longer available.")
         }
-        output.setInitialPosition(position)
+        anchorCaptureWriter(output, at: position)
         let session = previewSession
         output.takePreview = { [weak self] durations, waveforms in
             Task { @MainActor in
@@ -1075,11 +1116,7 @@ private final class CaptureWriter: @unchecked Sendable {
             let actualPosition = show.snapshot.transport.playing ? show.snapshot.transport.position : show.snapshot.transport.editPosition ?? show.snapshot.transport.position
             self.writer = writer
             activeTargets = Dictionary(uniqueKeysWithValues: targets.map { ($0.track, $0) })
-            writer.setInitialPosition(actualPosition)
-            for target in targets {
-                RecordingLaneLayout.shared.update(target.id, start: actualPosition)
-                LiveRecordingPreview.shared.takes[target.id]?.start = actualPosition
-            }
+            anchorCaptureWriter(writer, at: actualPosition)
             let session = previewSession
             writer.takePreview = { [weak self] durations, waveforms in
                 Task { @MainActor in
@@ -1109,7 +1146,7 @@ private final class CaptureWriter: @unchecked Sendable {
     }
     private var recordingGains: [UUID: Float] = [:]
     private var outputRecordingGains: [UUID: Float] = [:]
-    func observe(_ snapshot: ShowSnapshot) {
+    func observe(_ snapshot: ShowSnapshot, playbackAdvance: Double) {
         if countingIn && (snapshot.transport.playing || snapshot.transport.subPlay.playing) { cancelCountIn() }
         // Playback samples carry no arming changes. With no configured REC
         // tracks or capture resources, there is nothing to reconcile or stop.
@@ -1131,21 +1168,30 @@ private final class CaptureWriter: @unchecked Sendable {
         guard snapshot.transport.songId == recordingSong else { finish(); return }
         guard snapshot.transport.playing else { finish(); return }
         let now = ProcessInfo.processInfo.systemUptime
-        let expected = lastPosition + max(0,now-lastTime)
+        let advance = max(0, playbackAdvance - lastPlaybackAdvance)
+        let expected = lastPosition + advance
         var deviation = abs(snapshot.transport.position-expected)
+        let repeatSerial = snapshot.transport.repeatWrapSerial ?? 0
         if let cycle = recordingCycle {
             guard snapshot.transport.loop.enabled,
                   snapshot.transport.loop.start == cycle.range.lowerBound,
                   snapshot.transport.loop.end == cycle.range.upperBound else { finish(); return }
-            if expected >= cycle.range.upperBound-0.2, cycle.range.contains(snapshot.transport.position) {
-                let period = cycle.range.upperBound-cycle.range.lowerBound
-                deviation = abs((snapshot.transport.position-expected).remainder(dividingBy: period))
-            }
+            let repeats = repeatSerial &- lastRepeatWrapSerial
+            let jumps = (snapshot.transport.sectionJumpSerial ?? 0) &- (lastJumpSerial ?? 0)
+            let wrapped = repeats > 0 && repeats == jumps
+            deviation = cycle.transportDeviation(from: lastPosition, to: snapshot.transport.position, advance: advance, wrapped: wrapped)
         }
         if deviation > 0.2 {
+            NSLog("CatLive recording discontinuity position=%.6f previous=%.6f advance=%.6f expected=%.6f deviation=%.6f loop=%@ captureCycle=%@ jump=%@",
+                  snapshot.transport.position, lastPosition, playbackAdvance - lastPlaybackAdvance, expected, deviation,
+                  String(describing: snapshot.transport.loop), String(describing: recordingCycle?.range),
+                  String(describing: snapshot.transport.sectionJumpSerial))
             finish(); error = "Recording stopped at the timeline jump. The take has been preserved."
         }
         lastTime = now; lastPosition = snapshot.transport.position
+        lastPlaybackAdvance = playbackAdvance
+        lastJumpSerial = snapshot.transport.sectionJumpSerial
+        lastRepeatWrapSerial = repeatSerial
         guard recording else { return }
         let capturePosition = recordingCycle == nil ? snapshot.transport.position : recordingPosition(at: now)
         if let song = snapshot.project.songs.first(where: { $0.id == recordingSong }) {

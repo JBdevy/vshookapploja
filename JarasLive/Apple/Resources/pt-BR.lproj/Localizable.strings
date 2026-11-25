@@ -793,6 +793,7 @@
 
 "Create marker" = "Criar marcador";
 
+"Insert Elastic Point" = "Inserir Ponto Elástico";
 "Create tempo marker" = "Criar marcador de tempo";
 
 "Tempo marker" = "Marcador de tempo";
@@ -1197,6 +1198,9 @@
 "Open CatLive and enable Remote on your Mac." = "Abra o CatLive e ative o Remote no PC.";
 
 "Exit Remote" = "Sair do Remote";
+"Exit Native?" = "Sair do modo Nativo?";
+"Temporary projects will be discarded. Return to the mode selection?" = "Os projetos temporários serão descartados. Voltar à escolha de modo?";
+"Close the open projects and return to the mode selection?" = "Fechar os projetos abertos e voltar à escolha de modo?";
 
 "Observer" = "Observador";
 
@@ -1701,6 +1705,7 @@
 "Press a MIDI note or controller button." = "Pressione uma nota MIDI ou um botão do controlador.";
 
 "External (VST3)" = "Externo (VST3)";
+"External (VST3 / AU)" = "Externo (VST3 / AU)";
 
 "Same track, in sequence" = "Na mesma pista, em sequência";
 
@@ -2438,7 +2443,10 @@
 "Bloquear tudo" = "Bloquear tudo";
 "Regiões e marcadores" = "Regiões e marcadores";
 "Itens" = "Itens";
-"Volume e pan dos itens" = "Volume e pan dos itens";
+"Posição dos itens" = "Posição dos itens";
+"Volume dos itens" = "Volume dos itens";
+"Pan dos itens" = "Pan dos itens";
+"Mute dos itens" = "Mute dos itens";
 
 "Open project location" = "Abrir local do projeto";
 
@@ -2789,7 +2797,6 @@
 "Change destination" = "Alterar destino";
 "Remove send" = "Remover envio";
 "Delete note" = "Apagar anotação";
-"Samplers must be between 0 and 60 seconds." = "O sample precisa ter duração maior que zero e de até 60 segundos.";
 "Do you want to save the project %@?" = "Deseja salvar o projeto %@?";
 "Don't Save" = "Não salvar";
 "Resize Library" = "Ajustar largura do Library";
@@ -2836,3 +2843,36 @@
 "Could not import SF2:" = "Não foi possível importar SF2:";
 
 "Receive Audio Transmitter" = "Receber áudio do Main";
+"Edit note" = "Editar anotação";
+"Confirm note edit" = "Confirmar edição";
+"Preview region color" = "Cor da região no preview";
+"Custom preview region color" = "Cor personalizada da região no preview";
+"Preview region scale" = "Escala das regiões no preview";
+"Preview block scale" = "Escala do bloco no preview";
+"Preview region duration scale" = "Escala do tempo da região no preview";
+"Preview block duration scale" = "Escala do tempo do bloco no preview";
+"Show lyrics alongside preview" = "Exibir Letra junto ao preview";
+
+"Stem organization in the grid" = "Organização dos stems no grid";
+
+"Separated" = "Separado";
+
+"Crossfade overlapping items" = "Crossfader ao sobrepor itens";
+"Hoz Mixer All" = "Tudo";
+"Sends" = "Sends";
+"Bus" = "Bus";
+"Standard channels" = "Pistas padrão";
+"Wide channels" = "Pistas largas";
+"Files" = "Arquivos";
+"Locations" = "Locais";
+"Refresh folders" = "Atualizar pastas";
+"Empty folder" = "Pasta vazia";
+"Home folder" = "Pasta pessoal";
+"Documents folder" = "Documentos";
+"List view" = "Lista";
+"Column view" = "Colunas";
+"Search files" = "Buscar arquivos";
+"No matching files" = "Nenhum arquivo encontrado";
+"Forward" = "Avançar";
+"Loading" = "Carregando…";
+"Browse in Files" = "Explorar no app Arquivos";

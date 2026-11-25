@@ -1,6 +1,6 @@
 import SwiftUI
 
-let item = GridSelectionItem(id: UUID(), rect: CGRect(x: 100, y: 100, width: 400, height: 80), duration: 20)
+let item = GridSelectionItem(id: UUID(), rect: CGRect(x: 100, y: 100, width: 400, height: 80), duration: 20, fadeControlsEnabled: true)
 for (point, expected) in [(CGPoint(x: 250, y: 145), TimelineItemTouchGesture.Action.move),
                           (CGPoint(x: 101, y: 140), .resize(left: true)),
                           (CGPoint(x: 499, y: 140), .resize(left: false)),

@@ -99,6 +99,12 @@ public struct ExternalPlugin: Codable, Equatable, Identifiable, Sendable {
     public var bypassed = false
     public var componentState: String?, controllerState: String?
     public var effectKey: String { "External:" + id }
+    fileprivate var hasValidClassID: Bool {
+        if classID.count == 32 && classID.allSatisfy(\.isHexDigit) { return true }
+        let fields = classID.split(separator: "-", omittingEmptySubsequences: false)
+        return fields.count == 4 && fields[0] == "AU" &&
+            fields.dropFirst().allSatisfy { $0.count == 8 && $0.allSatisfy(\.isHexDigit) }
+    }
     public init(classID: String, name: String, path: String, category: String = "") { self.classID = classID; self.name = name; self.path = path; self.category = category }
 }
 public struct NativeFXInstance: Codable, Equatable, Sendable {
@@ -226,6 +232,70 @@ public struct CatSynthBank: Codable, Equatable, Sendable {
     }
 }
 
+public struct NativeArpeggiatorSettings: Codable, Equatable, Sendable {
+    public static let divisions = [2, 4, 6, 8, 12, 16, 24, 32, 48]
+    public static let directions = ["Up", "Down", "Up / Down", "As Played"]
+
+    public var division: Int
+    public var direction: Int
+    public var octaves: Int
+    public var gate: Int
+    public var sync: Bool
+    public var bpm: Int
+
+    public init(division: Int = 16, direction: Int = 0, octaves: Int = 1, gate: Int = 75,
+                sync: Bool = true, bpm: Int = 120) {
+        self.division = Self.divisions.contains(division) ? division : 16
+        self.direction = max(0, min(Self.directions.count - 1, direction))
+        self.octaves = max(1, min(4, octaves))
+        self.gate = max(5, min(100, gate))
+        self.sync = sync
+        self.bpm = max(20, min(400, bpm))
+    }
+
+    private enum CodingKeys: String, CodingKey { case division, direction, octaves, gate, sync, bpm }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(division: values.decodeIfPresent(Int.self, forKey: .division) ?? 16,
+                      direction: values.decodeIfPresent(Int.self, forKey: .direction) ?? 0,
+                      octaves: values.decodeIfPresent(Int.self, forKey: .octaves) ?? 1,
+                      gate: values.decodeIfPresent(Int.self, forKey: .gate) ?? 75,
+                      sync: values.decodeIfPresent(Bool.self, forKey: .sync) ?? true,
+                      bpm: values.decodeIfPresent(Int.self, forKey: .bpm) ?? 120)
+    }
+
+    public var gateFraction: Double { Double(gate) / 100 }
+    public func interval(transportBPM: Double) -> Double {
+        240 / (Double(division) * max(20, sync ? transportBPM : Double(bpm)))
+    }
+
+    public func step(_ index: Int, count: Int, pitchAt: (Int) -> Int) -> (note: Int, transpose: Int) {
+        guard count > 0 else { return (0, 0) }
+        var available = count
+        for octave in 1..<octaves {
+            for i in 0..<count where pitchAt(i) + octave * 12 <= 127 { available += 1 }
+        }
+        var step = index % available
+        if direction == 1 {
+            step = available - step - 1
+        } else if direction == 2 && available > 1 {
+            let period = 2 * available - 2
+            step = index % period
+            if step >= available { step = period - step }
+        }
+        if step < count { return (step, 0) }
+        step -= count
+        for octave in 1..<octaves {
+            for i in 0..<count where pitchAt(i) + octave * 12 <= 127 {
+                if step == 0 { return (i, octave * 12) }
+                step -= 1
+            }
+        }
+        return (0, 0)
+    }
+}
+
 public struct NativeFXSettings: Codable, Equatable, Sendable {
     public var instances: [NativeFXInstance]?
 
@@ -248,6 +318,7 @@ public struct NativeFXSettings: Codable, Equatable, Sendable {
         if kind == .compact { drummer16 = kit } else { drummer48 = kit }
     }
     public var arpeggiatorEnabled: Bool?
+    public var arpeggiator: NativeArpeggiatorSettings?
     public var chorusEnabled: Bool?
     public var phaserEnabled: Bool?
     public var ampEnabled: Bool?
@@ -385,7 +456,7 @@ public struct NativeFXSettings: Codable, Equatable, Sendable {
         }
         let external = externalPlugins ?? []
         guard Set(external.map(\.id)).count == external.count,
-              external.allSatisfy({ !$0.id.isEmpty && $0.classID.count == 32 && $0.classID.allSatisfy(\.isHexDigit) && !$0.name.isEmpty && !$0.path.isEmpty }) else { throw ProjectError.invalid("Invalid external plugin") }
+              external.allSatisfy({ !$0.id.isEmpty && $0.hasValidClassID && !$0.name.isEmpty && !$0.path.isEmpty }) else { throw ProjectError.invalid("Invalid external plugin") }
         guard Set(inserted).count == inserted.count, inserted.allSatisfy({ effect in Self.order.contains(effect) || effect == Self.stemSeparator || external.contains(where: { $0.effectKey == effect }) || native.contains(where: { $0.effectKey == effect }) }), bands.count <= 10, Set(bands.map(\.id)).count == bands.count,
               bands.allSatisfy({ $0.frequency.isFinite && (20...20000).contains($0.frequency) && $0.gain.isFinite && (-24...24).contains($0.gain) && $0.q.isFinite && (0.1...18).contains($0.q) && [6,12,24,36,48,72,96,192].contains($0.slope) && ["bell","lowCut","highCut","lowShelf","highShelf"].contains($0.type) }),
               [threshold, ratio, attack, release, makeup, delayTime, feedback, delayMix, reverbMix, reverbDecay, reverbLowCut, reverbHighCut].allSatisfy(\.isFinite),
@@ -411,9 +482,11 @@ extension NativeFXSettings {
     public var hasNativeMIDIInstrument: Bool {
         hasDrummerPad || effectKeys.contains { kind(of: $0) == "CatSynth" && isEnabled($0) }
     }
-    public var arpeggiatesMIDI: Bool {
-        effectKeys.contains { kind(of: $0) == "Arpeggiator" && isEnabled($0) }
+    public var midiArpeggio: NativeArpeggiatorSettings? {
+        guard let key = effectKeys.first(where: { kind(of: $0) == "Arpeggiator" && isEnabled($0) }) else { return nil }
+        return settings(for: key).arpeggiator ?? NativeArpeggiatorSettings()
     }
+    public var arpeggiatesMIDI: Bool { midiArpeggio != nil }
     public var allBypassed: Bool { !inserted.isEmpty && inserted.allSatisfy { !isEnabled($0) } }
     public mutating func setStripBypass(_ on: Bool, fromSession: Bool) {
         if on {
@@ -535,7 +608,7 @@ extension NativeFXSettings {
         case "CatSynth": next.catSynth = draft.catSynth; next.catSynthEnabled = draft.catSynthEnabled
         case "Drummer Pad 16": next.drummer16 = draft.drummer16; next.drummer16Enabled = draft.drummer16Enabled
         case "Drummer Pad 48": next.drummer48 = draft.drummer48; next.drummer48Enabled = draft.drummer48Enabled
-        case "Arpeggiator": next.arpeggiatorEnabled = draft.arpeggiatorEnabled
+        case "Arpeggiator": next.arpeggiatorEnabled = draft.arpeggiatorEnabled; next.arpeggiator = draft.arpeggiator
         case "CatLive Trigger": next.triggerEnabled = draft.triggerEnabled; next.trigger = draft.trigger
         case "Cat Gate": next.gateEnabled = draft.gateEnabled; next.gate = draft.gate
         case Self.stemSeparator: next.stemSeparatorEnabled = draft.stemSeparatorEnabled; next.stemMix = draft.stemMix

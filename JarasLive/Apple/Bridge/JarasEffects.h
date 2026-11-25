@@ -1,5 +1,12 @@
 #import <AVFoundation/AVFoundation.h>
 NS_ASSUME_NONNULL_BEGIN
+/// For native processors that consume parameter changes directly from their
+/// kernels, request a reset on the next render without locking the AU event queue.
+FOUNDATION_EXPORT BOOL JarasRequestNativePlaybackReset(AVAudioUnit *node);
+FOUNDATION_EXPORT void JarasBeginAudioDiskIO(void);
+FOUNDATION_EXPORT void JarasEndAudioDiskIO(void);
+FOUNDATION_EXPORT int64_t JarasAudioDiskOccupiedNanoseconds(void);
+
 @interface JarasMIDIChord : NSObject
 + (NSString *)nameForPitchClasses:(uint16_t)classes bass:(NSInteger)bass NS_SWIFT_NAME(name(pitchClasses:bass:));
 @end
@@ -30,8 +37,8 @@ NS_ASSUME_NONNULL_BEGIN
 @interface JarasPreparedClip : NSObject
 + (NSDictionary<NSString *, NSNumber *> *)memoryDiagnostics;
 /// Release idle PCM/history leases while retaining the graph and DSP storage.
-/// Prepare again before scheduling this source; never call on an audible voice.
-- (void)suspendStreaming;
+/// If a callback is still reading, defer reclamation until the next idle pass.
+- (void)suspendIdleStreaming;
 @property(nonatomic, readonly) AVAudioSourceNode *node;
 @property(nonatomic, readonly) double sourcePosition;
 @property(nonatomic, readonly) BOOL playing;
@@ -122,11 +129,14 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)beginPadRelease:(AVAudioUnitEffect *)node;
 + (BOOL)isPadReleaseComplete:(AVAudioUnitEffect *)node;
 + (void)setPlaybackBoundary:(AVAudioUnitEffect *)node hostTime:(uint64_t)hostTime;
++ (NSDictionary<NSString *, NSData *> *)overlapEnvelopes:(NSArray<NSArray *> *)items;
++ (void)setOverlapEnvelope:(AVAudioUnitEffect *)node data:(nullable NSData *)data;
 + (void)setInputFade:(AVAudioUnitEffect *)node fadeIn:(double)fadeIn fadeOut:(double)fadeOut duration:(double)duration position:(double)position hostTime:(uint64_t)hostTime sampleTime:(double)sampleTime;
 + (void)setInputFade:(AVAudioUnitEffect *)node fadeIn:(double)fadeIn fadeOut:(double)fadeOut fadeInCurve:(double)inCurve fadeInSCurve:(double)inS fadeOutCurve:(double)outCurve fadeOutSCurve:(double)outS duration:(double)duration position:(double)position hostTime:(uint64_t)hostTime sampleTime:(double)sampleTime;
 + (void)setInputChannelMode:(AVAudioUnitEffect *)node mode:(int)mode;
 + (void)setOutputMeteringEnabled:(AVAudioUnitEffect *)node enabled:(BOOL)enabled;
 + (float)takeOutputPeak:(AVAudioUnitEffect *)node channel:(NSUInteger)channel;
++ (float)takeOutputRMS:(AVAudioUnitEffect *)node;
 + (void)setAnalysisEnabled:(AVAudioUnitEffect *)node enabled:(BOOL)enabled;
 + (nullable NSData *)analysisFrame:(AVAudioUnitEffect *)node input:(BOOL)input;
 @end
@@ -171,6 +181,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)beginStopFade:(AVAudioUnitEffect *)node;
 + (void)setInputMeteringEnabled:(AVAudioUnitEffect *)node enabled:(BOOL)enabled;
 + (float)takeInputPeak:(AVAudioUnitEffect *)node channel:(NSUInteger)channel;
++ (float)takeInputRMS:(AVAudioUnitEffect *)node;
 + (void)configure:(AVAudioUnitEffect *)node first:(NSInteger)first count:(NSInteger)count;
 + (void)configurePatches:(AVAudioUnitEffect *)node firsts:(NSArray<NSNumber *> *)firsts counts:(NSArray<NSNumber *> *)counts;
 /// Use the graph's prepared format during live Patch edits; avoid querying an

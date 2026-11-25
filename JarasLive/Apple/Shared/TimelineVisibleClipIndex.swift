@@ -44,6 +44,28 @@ struct TimelineVisibleClipIndex {
         return result
     }
 
+    /// Visible portions of a stacked item. More recent paint order wins,
+    /// independent of the playback order used to mix overlapping audio.
+    func uncoveredParts(start: Double, end: Double, above sourceIndex: Int,
+                        interval: (Int) -> (Double, Double)) -> [Range<Double>]? {
+        let covers = indices(from: start, through: end)
+            .filter { $0 > sourceIndex }
+            .map(interval)
+            .filter { $0.0 < end && $0.1 > start }
+            .sorted { $0.0 < $1.0 }
+        if covers.isEmpty { return nil }
+        var remaining: [Range<Double>] = []
+        var left = start
+        for (first, last) in covers where last > left {
+            let right = min(first, end)
+            if right > left { remaining.append(left..<right) }
+            left = max(left, last)
+            if left >= end { return remaining }
+        }
+        remaining.append(left..<end)
+        return remaining
+    }
+
     /// Exposed internally for work-bound tests without adding per-frame clocks
     /// or counters to the renderer.
     func candidateRange(from start: Double, through end: Double) -> Range<Int> {

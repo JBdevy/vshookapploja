@@ -631,16 +631,25 @@ struct SectionListDock<Primary: View, Sections: View>: View {
     let leading: Bool
     let minimumPrimaryWidth: CGFloat
     let enforcesMinimumPrimaryWidth: Bool
+    let maximumSidebarWidth: CGFloat
+    let usesNativeResizeHandle: Bool
+    let retainsTrailingPane: Bool
+    let retainedSectionID: ObjectIdentifier?
     @AppStorage private var savedFraction: Double
     @State private var liveWidth: CGFloat?
     @State private var dragStart: CGFloat?
     @ViewBuilder let primary: () -> Primary
     @ViewBuilder let sections: () -> Sections
     init(visible: Bool, storageKey: String, minimumPrimaryWidth: CGFloat = 140, defaultFraction: Double = 0.45, leading: Bool = false,
-         enforcesMinimumPrimaryWidth: Bool = false,
+         enforcesMinimumPrimaryWidth: Bool = false, maximumSidebarWidth: CGFloat = .greatestFiniteMagnitude,
+         usesNativeResizeHandle: Bool = false, retainsTrailingPane: Bool = false, retainedSectionID: ObjectIdentifier? = nil,
          @ViewBuilder primary: @escaping () -> Primary, @ViewBuilder sections: @escaping () -> Sections) {
         self.visible = visible; self.leading = leading; self.minimumPrimaryWidth = minimumPrimaryWidth
         self.enforcesMinimumPrimaryWidth = enforcesMinimumPrimaryWidth
+        self.maximumSidebarWidth = maximumSidebarWidth
+        self.usesNativeResizeHandle = usesNativeResizeHandle
+        self.retainsTrailingPane = retainsTrailingPane
+        self.retainedSectionID = retainedSectionID
         _savedFraction = AppStorage(wrappedValue: defaultFraction, storageKey)
         self.primary = primary; self.sections = sections
     }
@@ -651,13 +660,9 @@ struct SectionListDock<Primary: View, Sections: View>: View {
             let available = total
             let width = boundedWidth(liveWidth ?? available * (savedFraction.isFinite ? savedFraction : 0.45), available: available)
             HStack(spacing: 0) {
-                if visible && leading {
-                    sections().frame(width: width).clipped()
-                }
+                if leading { sectionArea(width: width) }
                 primary().frame(width: visible ? max(0, available - width) : total).clipped()
-                if visible && !leading {
-                    sections().frame(width: width).clipped()
-                }
+                if !leading { sectionArea(width: width) }
             }.overlay(alignment: .leading) {
                 if visible {
                     resizeHandle(width: width, available: available, handle: handle)
@@ -666,11 +671,55 @@ struct SectionListDock<Primary: View, Sections: View>: View {
             }
         }.onChange(of: visible) { _ in liveWidth = nil; dragStart = nil }
     }
-    private func resizeHandle(width: CGFloat, available: CGFloat, handle: CGFloat) -> some View {
+    @ViewBuilder private func sectionArea(width: CGFloat) -> some View {
+        #if os(macOS)
+        if let retainedSectionID {
+            RetainedWorkspacePane(width: width, visible: visible, identity: AnyHashable(retainedSectionID), content: sections)
+                .frame(width: visible ? width : 0).clipped()
+                .allowsHitTesting(visible).accessibilityHidden(!visible)
+        } else {
+            ordinarySections(width: width)
+        }
+        #else
+        ordinarySections(width: width)
+        #endif
+    }
+    @ViewBuilder private func ordinarySections(width: CGFloat) -> some View {
+        if visible || (retainsTrailingPane && !leading) {
+            sections().frame(width: visible ? width : 0).clipped()
+                .allowsHitTesting(visible).accessibilityHidden(!visible)
+        }
+    }
+    @ViewBuilder private func resizeHandle(width: CGFloat, available: CGFloat, handle: CGFloat) -> some View {
+        #if os(macOS)
+        if usesNativeResizeHandle {
+            resizeIndicator(handle: handle)
+                .overlay {
+                    MixerResizeHandle(width: width, maximum: boundedWidth(available, available: available),
+                                      minimum: boundedWidth(0, available: available), direction: leading ? 1 : -1,
+                                      showsScrollRail: false, showsRail: false, maximumResizeFrequency: 60,
+                                      onCancel: { liveWidth = nil },
+                                      onEnd: { result in
+                                          savedFraction = boundedWidth(result, available: available) / max(1, available)
+                                          liveWidth = nil
+                                      }, onResize: { liveWidth = boundedWidth($0, available: available) })
+                }
+                .accessibilityLabel("Resize sections")
+        } else {
+            gestureResizeHandle(width: width, available: available, handle: handle)
+        }
+        #else
+        gestureResizeHandle(width: width, available: available, handle: handle)
+        #endif
+    }
+    private func resizeIndicator(handle: CGFloat) -> some View {
         Color.clear
             .overlay(Rectangle().fill(JarasTheme.line).frame(width: 2))
             .overlay(Capsule().fill(JarasTheme.secondary).frame(width: 2, height: 32))
             .frame(width: handle).contentShape(Rectangle())
+    }
+    private func gestureResizeHandle(width: CGFloat, available: CGFloat, handle: CGFloat) -> some View {
+        resizeIndicator(handle: handle)
             .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .global)
                 .onChanged { value in
                     if dragStart == nil { dragStart = width }
@@ -689,7 +738,8 @@ struct SectionListDock<Primary: View, Sections: View>: View {
             #endif
     }
     private func boundedWidth(_ requested: CGFloat, available: CGFloat) -> CGFloat {
-        let width = SmoothSeekPanelLayout.sidebarWidth(available: available, requested: requested, minimumPrimary: minimumPrimaryWidth)
+        let width = min(maximumSidebarWidth,
+                        SmoothSeekPanelLayout.sidebarWidth(available: available, requested: requested, minimumPrimary: minimumPrimaryWidth))
         guard enforcesMinimumPrimaryWidth else { return width }
         return min(width, max(min(104, available), available - minimumPrimaryWidth))
     }

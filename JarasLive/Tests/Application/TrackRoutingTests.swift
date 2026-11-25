@@ -29,6 +29,34 @@ import XCTest
     func applyProjectEdit(_ p: Project) throws { try p.validate(); project = p; fullEdits += 1 }
 }
 final class TrackRoutingTests: XCTestCase {
+    func testHozMixerFiltersUseInputsAndExplicitRoutesInTrackOrder() {
+        var song = Project.empty(name: "Mixer").songs[0]
+        var tracks = ["Group", "Line", "MIDI", "Aux", "Main return", "Unpatched"].map {
+            Track(id: UUID(), name: $0, role: .other)
+        }
+        let ids = tracks.map(\.id)
+        tracks[1].parentTrackID = ids[0]
+        tracks[1].inputPatch = .stereo
+        tracks[1].routing = TrackRouting(transmitters: [ids[0]])
+        tracks[2].midiInput = 1
+        tracks[3].routing = TrackRouting(receives: [ids[2]])
+        tracks[4].routing = TrackRouting(receives: [nil], mainReceiveSlot: 0)
+        song.tracks = tracks
+        func matches(_ scope: HozMixerTrackScope = .all, _ signals: Set<HozMixerSignal> = []) -> [String] {
+            song.hozMixerTracks(tracks, scope: scope, signals: signals).map(\.name)
+        }
+        XCTAssertEqual(matches(.groups), ["Group"])
+        XCTAssertEqual(matches(.tracks), ["Line", "MIDI", "Aux", "Main return", "Unpatched"])
+        XCTAssertEqual(matches(.all, [.audio, .midi]), ["Line", "MIDI"])
+        XCTAssertEqual(matches(.all, [.sends]), ["MIDI"])
+        XCTAssertEqual(matches(.all, [.bus]), ["Aux", "Main return"])
+        XCTAssertEqual(matches(.groups, [.bus]), [])
+        XCTAssertEqual(song.hozMixerBusSources, [ids[3]: [ids[2]]])
+        song.tracks[2].routing = TrackRouting(transmitters: [ids[3]])
+        song.tracks[1].routing = TrackRouting(transmitters: [ids[0], ids[3]])
+        XCTAssertEqual(song.hozMixerBusSources, [ids[3]: [ids[1], ids[2]]])
+    }
+
     @MainActor func testMainSendsPreserveDestinationOrderAndReplaceAtomically() throws {
         var project = Project.empty(name: "Main sends")
         let tracks = (0..<3).map { Track(id: UUID(), name: "Track \($0)", role: .other) }
@@ -89,18 +117,39 @@ final class TrackRoutingTests: XCTestCase {
         project.songs[0].tracks = tracks
         let show = try ShowController(executor: RoutingExecutor(), persistence: MemoryProjectStore(), initialProject: project)
         let source = tracks[0].id, first = tracks[1].id, second = tracks[2].id
-        show.setTrackRouting([source], receive: false, slot: 0, other: first)
+        show.setTrackRouting([first], receive: true, slot: 0, other: source)
         show.setTrackRouting([source], receive: false, slot: 1, other: second)
+        XCTAssertEqual(show.current?.tracks[0].routing?.transmitters, [first, second])
+        XCTAssertEqual(show.current?.tracks[1].routing?.receives, [source])
         show.setTrackSendTap(source, destination: first, tap: .preFX)
         show.setTrackSendTap(source, destination: second, tap: .preFader)
+        let firstSend = TrackConnection(source: source, destination: first)
+        let secondSend = TrackConnection(source: source, destination: second)
+        var liveGains: [TrackConnection: Double] = [:]
+        show.audioSendGain = { liveGains[$0] = $1 }
+        show.setTrackSendGain(firstSend, gain: 0.25, preview: true)
+        XCTAssertEqual(liveGains[firstSend], 0.25)
+        XCTAssertEqual(show.current?.tracks[0].routing?.sendGain(to: first), 1)
+        show.restoreTrackSendGain(firstSend)
+        XCTAssertEqual(liveGains[firstSend], 1)
+        show.setTrackSendGain(firstSend, gain: 0.25)
+        show.setTrackSendGain(secondSend, gain: 0.5)
+        show.setTrackSendTap(source, destination: first, tap: .postFader)
+        show.setTrackSendGain(firstSend, gain: 0.1)
+        XCTAssertEqual(show.current?.tracks[0].routing?.sendGain(to: first), 0.25)
+        show.setTrackSendTap(source, destination: first, tap: .preFX)
         let data = try JSONEncoder().encode(show.snapshot.project)
         let reopened = try JSONDecoder().decode(Project.self, from: data)
         XCTAssertEqual(reopened.songs[0].tracks[0].routing?.sendTap(to: first), .preFX)
         XCTAssertEqual(reopened.songs[0].tracks[0].routing?.sendTap(to: second), .preFader)
+        XCTAssertEqual(reopened.songs[0].tracks[0].routing?.sendGain(to: first), 0.25)
+        XCTAssertEqual(reopened.songs[0].tracks[0].routing?.sendGain(to: second), 0.5)
         show.setTrackRouting([source], receive: false, slot: 0, other: nil)
         show.setTrackRouting([source], receive: false, slot: 0, other: first)
         XCTAssertEqual(show.current?.tracks[0].routing?.sendTap(to: first), .postFader)
         XCTAssertEqual(show.current?.tracks[0].routing?.sendTap(to: second), .preFader)
+        XCTAssertEqual(show.current?.tracks[0].routing?.sendGain(to: first), 1)
+        XCTAssertEqual(show.current?.tracks[0].routing?.sendGain(to: second), 0.5)
     }
 
     @MainActor func testDisableRecordingInputAndRestoreLinkedPair() throws {

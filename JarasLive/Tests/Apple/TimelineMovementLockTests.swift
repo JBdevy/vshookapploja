@@ -144,6 +144,8 @@ import Foundation
         scoped.previewItemGain(audioItem.id, gain: 0.1)
         scoped.previewItemPan(audioItem.id, pan: -0.75)
         scoped.setTimelineLockOptions(4)
+        let legacyMixMask = TimelineLocks.itemVolume | TimelineLocks.itemPan
+        precondition(scoped.timelineLockOptions == legacyMixMask && !scoped.timelineItemMuteLocked)
         let mixBefore = scoped.current!.tracks.first { $0.id == audioTrack.id }!.clips[0]
         precondition(heardGain[audioItem.id] == (mixBefore.gain ?? 1) && heardPan[audioItem.id] == (mixBefore.pan ?? 0),
             "locking mix during a live preview restores committed audio values")
@@ -156,16 +158,31 @@ import Foundation
         precondition(scoped.current!.tracks.first { $0.id == audioTrack.id }!.clips[0].startTime == 65)
         try await scoped.flushProject()
         let partial = try await store.load()!
-        precondition(partial.effectiveTimelineLocks == 4 && partial.timelineMovementLocked == true)
+        precondition(partial.effectiveTimelineLocks == legacyMixMask && partial.timelineMovementLocked == true)
         scoped.setTimelineMovementLocked(false); scoped.setItemGain(audioItem.id, gain: 0.25)
         precondition(scoped.current!.tracks.first { $0.id == audioTrack.id }!.clips[0].gain == 0.25)
-        precondition(scoped.timelineLockOptions == 4 && scoped.timelineActiveLockOptions == 0)
+        precondition(scoped.timelineLockOptions == legacyMixMask && scoped.timelineActiveLockOptions == 0)
         try await scoped.flushProject()
         let configured = try await store.load()!
-        precondition(configured.configuredTimelineLocks == 4 && configured.effectiveTimelineLocks == 0)
+        precondition(configured.configuredTimelineLocks == legacyMixMask && configured.effectiveTimelineLocks == 0)
         scoped.setTimelineMovementLocked(true)
-        precondition(scoped.timelineActiveLockOptions == 4 && !scoped.timelineItemsLocked && !scoped.timelineRegionsLocked,
+        precondition(scoped.timelineActiveLockOptions == legacyMixMask && !scoped.timelineItemsLocked && !scoped.timelineRegionsLocked,
             "re-enabling restores the remembered categories, not all categories")
+        let item = { scoped.current!.tracks.first { $0.id == audioTrack.id }!.clips[0] }
+        scoped.setTimelineLockOptions(TimelineLocks.itemVolume | TimelineLocks.itemMute)
+        scoped.setItemGain(audioItem.id, gain: 0.5)
+        scoped.setItemPan(audioItem.id, pan: -0.5)
+        scoped.send(.clipMute, target: audioItem.id)
+        scoped.setItemsMix([audioItem.id], muted: true)
+        precondition(item().gain == 0.25 && item().pan == -0.5 && item().muted != true)
+        scoped.setTimelineLockOptions(TimelineLocks.itemPan)
+        scoped.setItemGain(audioItem.id, gain: 0.5)
+        scoped.setItemPan(audioItem.id, pan: 0.5)
+        scoped.send(.clipMute, target: audioItem.id)
+        precondition(item().gain == 0.5 && item().pan == -0.5 && item().muted == true)
+        try await scoped.flushProject()
+        let panOnly = try await store.load()!
+        precondition(panOnly.effectiveTimelineLocks == TimelineLocks.itemPan)
         print("TIMELINE_LOCK_INDEPENDENT_SCOPES_REGION_CONTENTS_MIX_AND_PARTIAL_SAVE_OK")
     }
 }

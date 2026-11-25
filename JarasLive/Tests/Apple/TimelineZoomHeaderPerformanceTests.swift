@@ -18,7 +18,7 @@
             lane: lanes.lanes[$0.id] ?? 0, edgePadding: 10, selected: false, pinned: false,
             input: RegionRightClick(edit: {})) }
         let header = NativeTimelineHeaderView()
-        header.configure(.init(song: song, lanes: lanes, parentIDs: [], regionTargets: targets,
+        header.configure(.init(song: song, lanes: lanes, rulerSections: song.tempoSections(until: song.timelineScrollEnd), parentIDs: [], regionTargets: targets,
             edit: { _ in }, delete: { _ in }, convert: { _ in }, seek: { _ in }, move: { _ in }))
         for distant in (ProcessInfo.processInfo.environment["CATLIVE_ZOOM_PROFILE"] == "1" ? [true] : [false, true]) {
             var timings: [Double] = []

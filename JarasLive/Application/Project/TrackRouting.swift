@@ -71,6 +71,7 @@ public struct TrackVisibilityState: Equatable, Sendable {
 
 public enum TrackSendTap: String, Codable, CaseIterable, Sendable {
     case preFX, postFX, preFader, postFader
+    public var isPreFader: Bool { self != .postFader }
     public var title: String {
         switch self {
         case .preFX: return "Pre-FX"
@@ -87,6 +88,7 @@ public struct TrackRouting: Codable, Equatable, Sendable {
     public var mainReceiveSlot: Int?
     public var mainSendOrder: Int?
     public var sendTaps: [String: TrackSendTap]?
+    public var sendGains: [String: Double]?
     public init(receives: [UUID?] = [], transmitters: [UUID?] = [], mainReceiveSlot: Int? = nil) {
         self.receives = receives; self.transmitters = transmitters
         self.mainReceiveSlot = mainReceiveSlot
@@ -100,16 +102,73 @@ public struct TrackRouting: Codable, Equatable, Sendable {
         taps[destination.uuidString] = tap == .postFader ? nil : tap
         sendTaps = taps.isEmpty ? nil : taps
     }
-    mutating func removeUnusedSendTaps() {
+    public func sendGain(to destination: UUID) -> Double {
+        let gain = sendGains?[destination.uuidString] ?? sendGains?[destination.uuidString.lowercased()] ?? 1
+        return gain.isFinite ? min(1, max(0, gain)) : 1
+    }
+    public mutating func setSendGain(_ gain: Double, to destination: UUID) {
+        guard gain.isFinite else { return }
+        let value = min(1, max(0, gain))
+        var gains = sendGains ?? [:]
+        gains[destination.uuidString.lowercased()] = nil
+        gains[destination.uuidString] = value == 1 ? nil : value
+        sendGains = gains.isEmpty ? nil : gains
+    }
+    mutating func removeUnusedSendSettings() {
         let destinations = Set(transmitters.compactMap { $0?.uuidString })
-        let retained = sendTaps?.filter { destinations.contains($0.key.uppercased()) }
-        sendTaps = retained?.isEmpty == false ? retained : nil
+        let taps = sendTaps?.filter { destinations.contains($0.key.uppercased()) }
+        let gains = sendGains?.filter { destinations.contains($0.key.uppercased()) }
+        sendTaps = taps?.isEmpty == false ? taps : nil
+        sendGains = gains?.isEmpty == false ? gains : nil
     }
 }
 public struct TrackConnection: Hashable, Sendable {
     public let source: UUID
     public let destination: UUID
 }
+
+public enum HozMixerTrackScope: String, CaseIterable {
+    case all, tracks, groups
+    public var label: String {
+        switch self {
+        case .all: return "Hoz Mixer All"
+        case .tracks: return "Tracks"
+        case .groups: return "Groups"
+        }
+    }
+}
+
+public enum HozMixerSignal: String, CaseIterable {
+    case audio = "Audio", midi = "MIDI", sends = "Sends", bus = "Bus"
+}
+
+public extension Song {
+    var hozMixerBusSources: [UUID: [UUID]] {
+        let order = Dictionary(tracks.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first })
+        let routes = trackConnections.filter { order[$0.source] != nil && order[$0.destination] != nil }
+        return Dictionary(grouping: routes, by: \.destination).mapValues {
+            $0.map(\.source).sorted { order[$0, default: 0] < order[$1, default: 0] }
+        }
+    }
+
+    func hozMixerTracks(_ candidates: [Track], scope: HozMixerTrackScope, signals: Set<HozMixerSignal>) -> [Track] {
+        guard scope != .all || !signals.isEmpty else { return candidates }
+        let groups = Set(tracks.compactMap(\.parentTrackID))
+        let connections = signals.contains(.sends) || signals.contains(.bus) ? trackConnections : []
+        let senders = Set(connections.map(\.source))
+        let receivers = Set(connections.map(\.destination))
+        return candidates.filter { track in
+            let isGroup = groups.contains(track.id)
+            guard scope == .all || (scope == .groups) == isGroup else { return false }
+            return signals.isEmpty
+                || (signals.contains(.audio) && (track.inputPatch?.firstChannel ?? 0) > 0)
+                || (signals.contains(.midi) && (track.midiInput ?? 0) > 0)
+                || (signals.contains(.sends) && senders.contains(track.id))
+                || (signals.contains(.bus) && (receivers.contains(track.id) || track.receivesMain))
+        }
+    }
+}
+
 public extension Song {
     /// Receive and Transmitter describe the same connection from opposite ends.
     /// A set avoids doubling the signal when both ends name each other.
@@ -153,7 +212,7 @@ public extension Song {
                 }
             }
         }
-        for index in tracks.indices { tracks[index].routing?.removeUnusedSendTaps() }
+        for index in tracks.indices { tracks[index].routing?.removeUnusedSendSettings() }
         var result: [UUID: TrackRouting] = [:]
         for (old, current) in zip(before, tracks) where old.routing != current.routing { result[current.id] = current.routing ?? TrackRouting() }
         return result

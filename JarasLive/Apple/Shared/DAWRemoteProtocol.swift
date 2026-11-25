@@ -469,10 +469,13 @@ struct DAWRemoteState: Codable, Equatable {
     /// Missing fields identify a host without Preview control support.
     var previewActive: Bool? = nil
     var previewPage: Int? = nil
+    var previewSlots: TeleprompterPreviewSlots? = nil
     var vinhetas: DAWRemoteVinhetas? = nil
     var recording: Bool? = nil
     var smkLoopName: String? = nil
     var smkLoopColor: UInt32? = nil
+    var trackMixerStripeOnly: Bool? = nil
+    var gridInvertsWaveforms: Bool? = nil
     /// Original unified songs keep their active child; only aliases replace the displayed row ID.
     var setlistCurrentEntryId: UUID? {
         if let id = currentPlaylistEntryId, regions.contains(where: { $0.id == id && $0.sourceRegionId != nil }) { return id }
@@ -1122,37 +1125,16 @@ enum DAWRemotePhonePanel: CaseIterable {
     }
 }
 
-struct DAWRemotePanelWidths: Equatable {
+struct TabletWorkspacePanelWidths {
     let track: Double
-    let setlist: Double
-    var grid: Double { max(0, 1 - track - setlist) }
-    init(track: Double, setlist: Double) {
-        self.track = track.isFinite ? min(1, max(0, track)) : 0
-        self.setlist = setlist.isFinite ? min(1 - self.track, max(0, setlist)) : 0
-    }
-    func resizingTrack(by translation: Double) -> Self {
-        guard translation.isFinite else { return self }
-        return Self(track: track + translation, setlist: setlist)
-    }
-    func resizingSetlist(by translation: Double) -> Self {
-        guard translation.isFinite else { return self }
-        let width = min(1, max(0, setlist - translation))
-        return Self(track: min(track, 1 - width), setlist: width)
-    }
-}
-
-struct NativeWorkspacePanelWidths {
-    let track: Double
-    let trackIcons: Double
     let setlist: Double
     let grid: Double
 
-    init(preferred: DAWRemotePanelWidths, reference: Double, available: Double,
-         minimumTrack: Double, iconWidth: Double) {
-        track = preferred.track > 0 ? min(available, max(minimumTrack, preferred.track * reference)) : 0
-        trackIcons = track > 0 ? min(iconWidth, max(0, available - track)) : 0
-        setlist = min(preferred.setlist * reference, max(0, available - track - trackIcons))
-        grid = max(0, available - track - trackIcons - setlist)
+    init(trackVisible: Bool, trackWidth: Double, setlistFraction: Double, reference: Double, available: Double) {
+        let available = max(0, available)
+        track = trackVisible ? min(available, trackWidth) : 0
+        setlist = min(setlistFraction * reference, available - track)
+        grid = available - track - setlist
     }
 }
 
@@ -1167,7 +1149,8 @@ enum NativeRegionDrawerSwipe {
 /// Match desktop lane heights while retaining alignment between mixer and grid.
 enum DAWRemoteItemLayout {
     static let defaultLaneHeight = 86.0
-    static func heightScale(_ value: Double) -> Double { value.isFinite ? min(3, max(0.1, value)) : 1 }
+    static let maximumHeightScale = 3.0
+    static func heightScale(_ value: Double) -> Double { value.isFinite ? min(maximumHeightScale, max(0.1, value)) : 1 }
     static func laneHeight(_ track: DAWRemoteState.Track, scale: Double = 1) -> Double {
         max((track.laneCount ?? 1) > 1 ? 26 : 24, defaultLaneHeight * ((track.laneCount ?? 1) > 1 ? 0.7 : 1) * heightScale(scale) * (track.heightScale ?? 1))
     }

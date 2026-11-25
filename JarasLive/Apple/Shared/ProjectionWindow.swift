@@ -3,8 +3,8 @@ import AppKit
 import CoreGraphics
 import QuartzCore
 
-/// A presentation fills its display without moving the workspace. System chrome
-/// is hidden for this app while a projection is fullscreen and restored afterward.
+/// A presentation fills its display independently from the workspace and
+/// leaves the system menu bar and Dock under macOS control.
 final class ProjectionWindow: NSWindow {
     var closesOnRightDoubleClick = false
     private(set) var isProjectionFullscreen = false
@@ -145,30 +145,25 @@ final class ProjectionWindow: NSWindow {
             window.orderOut(nil)
             return
         }
-        window.level = workspaceToolLevel
+        if window.level != workspaceToolLevel { window.level = workspaceToolLevel }
         if activates { window.makeKeyAndOrderFront(nil) }
         else { window.orderFront(nil) }
-    }
-    private static var savedPresentationOptions: NSApplication.PresentationOptions?
-    private static func updatePresentationOptions() {
-        let presenting = NSApp.windows.contains { ($0 as? ProjectionWindow)?.isProjectionFullscreen == true }
-        if presenting {
-            if savedPresentationOptions == nil { savedPresentationOptions = NSApp.presentationOptions }
-            var options = savedPresentationOptions ?? []
-            options.subtract([.autoHideDock, .autoHideMenuBar])
-            options.formUnion([.hideDock, .hideMenuBar])
-            NSApp.presentationOptions = options
-        } else if let options = savedPresentationOptions {
-            NSApp.presentationOptions = options
-            savedPresentationOptions = nil
-        }
     }
     private var changingPresentation = false
     private func savePlacement() {
         guard !changingPresentation, !inLiveResize, let placementKey else { return }
-        UserDefaults.standard.set(NSStringFromRect(saved?.frame ?? frame), forKey: placementKey + ".frame")
-        UserDefaults.standard.set(isProjectionFullscreen, forKey: placementKey + ".fullscreen")
-        UserDefaults.standard.set(NSStringFromRect(screen?.frame ?? frame), forKey: placementKey + ".screen")
+        let defaults = UserDefaults.standard
+        let placement = NSStringFromRect(saved?.frame ?? frame)
+        if defaults.string(forKey: placementKey + ".frame") != placement {
+            defaults.set(placement, forKey: placementKey + ".frame")
+        }
+        if defaults.bool(forKey: placementKey + ".fullscreen") != isProjectionFullscreen {
+            defaults.set(isProjectionFullscreen, forKey: placementKey + ".fullscreen")
+        }
+        let display = NSStringFromRect(screen?.frame ?? frame)
+        if defaults.string(forKey: placementKey + ".screen") != display {
+            defaults.set(display, forKey: placementKey + ".screen")
+        }
     }
     func restorePlacement(key: String) {
         placementKey = key
@@ -190,7 +185,7 @@ final class ProjectionWindow: NSWindow {
         changingPresentation = false
         if UserDefaults.standard.bool(forKey: key + ".fullscreen") {
             let savedScreen = UserDefaults.standard.string(forKey: key + ".screen").map(NSRectFromString)
-            toggleProjectionFullscreen(on: NSScreen.screens.first { $0.frame == savedScreen })
+            toggleProjectionFullscreen(on: NSScreen.screens.first { $0.frame == savedScreen }, presenting: false)
         }
         placementObservers = [NSWindow.didMoveNotification, NSWindow.didResizeNotification,
                               NSWindow.didEndLiveResizeNotification].map { name in
@@ -215,7 +210,7 @@ final class ProjectionWindow: NSWindow {
         super.sendEvent(event)
     }
     override func toggleFullScreen(_ sender: Any?) { toggleProjectionFullscreen() }
-    func toggleProjectionFullscreen(on target: NSScreen? = nil) {
+    func toggleProjectionFullscreen(on target: NSScreen? = nil, presenting: Bool = true) {
         let wasChanging = changingPresentation
         changingPresentation = true
         // Publish the final style and frame together, retaining the hosting view
@@ -226,8 +221,10 @@ final class ProjectionWindow: NSWindow {
         NSAnimationContext.current.duration = 0
         NSAnimationContext.current.allowsImplicitAnimation = false
         defer {
-            contentView?.layoutSubtreeIfNeeded()
-            if isVisible { contentView?.displayIfNeeded() }
+            if presenting {
+                contentView?.layoutSubtreeIfNeeded()
+                if isVisible { contentView?.displayIfNeeded() }
+            }
             NSAnimationContext.endGrouping()
             CATransaction.commit()
             changingPresentation = wasChanging
@@ -235,13 +232,12 @@ final class ProjectionWindow: NSWindow {
         }
         if let state = saved {
             saved = nil; isProjectionFullscreen = false
-            Self.updatePresentationOptions()
             styleMask = state.style; collectionBehavior = state.behavior; level = state.level
             titleVisibility = state.title; titlebarAppearsTransparent = state.transparentTitlebar
             isMovable = state.movable; isMovableByWindowBackground = state.movableByBackground
             hasShadow = state.shadow; canHide = state.canHide; hidesOnDeactivate = state.hidesOnDeactivate
             setFrame(state.frame, display: false, animate: false)
-            makeKeyAndOrderFront(nil)
+            if presenting { makeKeyAndOrderFront(nil) }
             return
         }
         guard let display = target ?? screen ?? NSScreen.main else { return }
@@ -250,19 +246,21 @@ final class ProjectionWindow: NSWindow {
                            movable: isMovable, movableByBackground: isMovableByWindowBackground,
                            shadow: hasShadow, canHide: canHide, hidesOnDeactivate: hidesOnDeactivate)
         isProjectionFullscreen = true
-        Self.updatePresentationOptions()
         styleMask = .borderless; titleVisibility = .hidden; titlebarAppearsTransparent = true
         isMovable = false; isMovableByWindowBackground = false; hasShadow = false
         canHide = false; hidesOnDeactivate = false
         level = Self.workspaceTools.contains(self) ? Self.workspaceToolLevel : .normal
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         setFrame(display.frame, display: false, animate: false)
-        makeKeyAndOrderFront(nil)
+        if presenting { makeKeyAndOrderFront(nil) }
     }
     override func close() {
         savePlacement()
         changingPresentation = true
-        if isProjectionFullscreen { toggleProjectionFullscreen() }
+        // Reopening creates a fresh window from the saved placement. Avoid a
+        // fullscreen-to-windowed relayout and a second key-window transition.
+        isProjectionFullscreen = false
+        saved = nil
         parent?.removeChildWindow(self)
         super.close()
     }

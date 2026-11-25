@@ -90,6 +90,7 @@ struct TextItemNotepad: NSViewRepresentable {
     let apply: () -> Void
     let cancel: () -> Void
     var outlineStanzas = false
+    var saveNote: ((String) -> Void)? = nil
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSScrollView()
@@ -117,16 +118,60 @@ struct TextItemNotepad: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.parent = self
         guard let editor = scroll.documentView as? TextItemNotepadView else { return }
+        let coordinator = context.coordinator
         editor.apply = apply; editor.cancel = cancel
         editor.outlineStanzas = outlineStanzas
-        if ItemTextColors.runs(editor.encodedText) != ItemTextColors.runs(text) { editor.loadColoredText(text) }
+        if saveNote != nil {
+            if !coordinator.hasUnsavedNoteChanges, coordinator.lastNoteText != text {
+                editor.loadColoredText(text)
+                coordinator.lastNoteText = text
+            }
+        } else if ItemTextColors.runs(editor.encodedText) != ItemTextColors.runs(text) {
+            editor.loadColoredText(text)
+        }
+    }
+    static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) {
+        guard let editor = scroll.documentView as? TextItemNotepadView else { return }
+        coordinator.finishNoteEdit(in: editor)
+        if let window = editor.window, window.firstResponder === editor { window.makeFirstResponder(nil) }
+        editor.delegate = nil
     }
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: TextItemNotepad
-        init(_ parent: TextItemNotepad) { self.parent = parent }
+        var lastNoteText: String
+        private var noteAutosave: Task<Void, Never>?
+        var hasUnsavedNoteChanges: Bool { noteAutosave != nil }
+
+        init(_ parent: TextItemNotepad) {
+            self.parent = parent
+            lastNoteText = parent.text
+        }
+
         func textDidChange(_ notification: Notification) {
-            guard let editor = notification.object as? NSTextView else { return }
-            parent.text = (editor as? TextItemNotepadView)?.encodedText ?? editor.string
+            guard let editor = notification.object as? TextItemNotepadView else { return }
+            guard parent.saveNote != nil else {
+                parent.text = editor.encodedText
+                return
+            }
+            noteAutosave?.cancel()
+            noteAutosave = Task { @MainActor [weak self, weak editor] in
+                do { try await Task.sleep(nanoseconds: 350_000_000) }
+                catch { return }
+                guard let self, let editor else { return }
+                self.noteAutosave = nil
+                let text = editor.encodedText
+                self.lastNoteText = text
+                self.parent.saveNote?(text)
+            }
+        }
+
+        fileprivate func finishNoteEdit(in editor: TextItemNotepadView) {
+            guard let noteAutosave, let save = parent.saveNote else { return }
+            noteAutosave.cancel()
+            self.noteAutosave = nil
+            let text = editor.encodedText
+            // Dismantling can happen during a SwiftUI update. Publish after it returns.
+            DispatchQueue.main.async { save(text) }
         }
     }
 }
@@ -211,7 +256,7 @@ private final class TextItemNotepadView: NSTextView {
         guard let window, !initiallyFocused else { return }
         initiallyFocused = true
         DispatchQueue.main.async { [weak self, weak window] in
-            guard let self, let window else { return }
+            guard let self, let window, self.window === window else { return }
             window.makeFirstResponder(self)
             self.setSelectedRange(NSRange(location: (self.string as NSString).length, length: 0))
         }

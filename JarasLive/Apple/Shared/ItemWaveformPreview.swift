@@ -12,11 +12,20 @@ import SwiftUI
             case pan(Double)
             case fade(fadeIn: Bool, seconds: Double)
             case shape(fadeIn: Bool, sCurve: Bool, value: Double)
+            case elastic(points: [ElasticPoint], duration: Double, sourceScale: Double?)
         }
         let adjustment: Adjustment
+        var gain: Double? {
+            if case .gain(let value) = adjustment { return value }
+            return nil
+        }
         func applying(to source: AudioClip) -> AudioClip {
             var clip = source
             switch adjustment {
+            case .elastic(let points, let duration, let scale):
+                clip.elasticPoints = points
+                clip.duration = duration
+                clip.elasticSourceScale = scale
             case .gain(let gain): clip.gain = gain
             case .pan(let pan): clip.pan = pan
             case .fade(let fadeIn, let seconds):
@@ -75,6 +84,15 @@ import SwiftUI
         guard value != (sCurve ? curve.sCurve : curve.curvature) else { clear(); return }
         let next = State(id: source.id, adjustment: .shape(fadeIn: fadeIn, sCurve: sCurve, value: value))
         if state != next { state = next }
+    }
+    func updateElastic(_ clip: AudioClip) {
+        awaitingPresentation = false
+        let next = State(id: clip.id, adjustment: .elastic(points: clip.elasticPoints ?? [], duration: clip.duration,
+                                                               sourceScale: clip.elasticSourceScale))
+        if state != next { state = next }
+    }
+    func clearElastic() {
+        if case .elastic = state?.adjustment { clear() }
     }
     func clear() { awaitingPresentation = false; if state != nil { state = nil } }
 }

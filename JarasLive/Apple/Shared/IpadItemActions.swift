@@ -136,8 +136,12 @@ struct IpadItemBodyContextMenu: UIViewRepresentable {
                         action("Editar nome", symbol: "pencil") { editingName = true }
                     }
                     if track.kind == .standard || clip.isProjectionMedia {
-                        action("Adjust volume", symbol: "speaker.wave.2") { mixParameter = "volume" }
-                        action("Adjust pan", symbol: "slider.horizontal.3") { mixParameter = "pan" }
+                        if !show.timelineItemVolumeLocked {
+                            action("Adjust volume", symbol: "speaker.wave.2") { mixParameter = "volume" }
+                        }
+                        if !show.timelineItemPanLocked {
+                            action("Adjust pan", symbol: "slider.horizontal.3") { mixParameter = "pan" }
+                        }
                     }
                     if entries.count == 1, clip.midi != nil { action("Exportar MIDI", symbol: "square.and.arrow.up") { exportMIDI() } }
                     if fileURL != nil { action("Open file location", symbol: "folder") { locatingFile = true } }
@@ -145,7 +149,7 @@ struct IpadItemBodyContextMenu: UIViewRepresentable {
                     if track.kind == .standard || clip.isProjectionMedia {
                         action("FX", symbol: "slider.horizontal.3") { show.reportItemSelection(targets); fx = true }
                     }
-                    if !editableIDs.isEmpty {
+                    if !editableIDs.isEmpty && !show.timelineItemMuteLocked {
                         let muted = standard.allSatisfy { $0.1.muted == true }
                         action(muted ? "Unmute items" : "Mute items", symbol: muted ? "speaker.wave.2" : "speaker.slash") {
                             show.setItemsMix(editableIDs, muted: !muted)
@@ -156,6 +160,12 @@ struct IpadItemBodyContextMenu: UIViewRepresentable {
                     }
                     if !rateIDs.isEmpty {
                         action("Config rate", symbol: "speedometer") { configuringRate = true }
+                    }
+                    if track.kind == .standard, clip.midi == nil, clip.text == nil, !clip.isProjectionMedia,
+                       (clip.audioFile ?? track.audioFile) != nil, !show.timelineItemsLocked {
+                        action("Insert Elastic Point", symbol: "arrow.left.and.right") {
+                            show.insertElasticPoints(Set(entries.map { $0.1.id })); close()
+                        }
                     }
                     if !audio.isEmpty {
                         tuner

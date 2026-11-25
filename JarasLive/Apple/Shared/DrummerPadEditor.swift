@@ -185,8 +185,8 @@ struct DrummerPadEditor: View {
             set: { value in if value { dropIndex = i } else if dropIndex == i { dropIndex = nil } })) { providers in
             guard let p = providers.first else { return false }
             p.loadDataRepresentation(forTypeIdentifier: LibrarySamplerTransfer.type.identifier) { data, _ in
-                guard let url = LibrarySamplerTransfer.url(data), let reference = DrummerSamples.reference(url) else { return }
-                DispatchQueue.main.async { assign(reference, from: url, at: i) }
+                guard let url = LibrarySamplerTransfer.url(data), DrummerSamples.reference(url) != nil else { return }
+                DispatchQueue.main.async { insertAudio(url, at: i) }
             }
             return true
         }
@@ -214,7 +214,7 @@ struct DrummerPadEditor: View {
                         }
                         return source
                     }
-                    return try WorkspaceLibrary.copySampler(source, into: directory, reuseIdentical: true)
+                    return try WorkspaceLibrary.copySampler(source, into: directory, forPad: true)
                 }.value
                 NotificationCenter.default.post(name: VinhetasController.padSamplesChanged, object: nil)
                 guard imports[index] == request else { return }

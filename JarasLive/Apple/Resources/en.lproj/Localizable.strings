@@ -662,7 +662,7 @@
 "This routing would create an audio feedback loop." = "This routing would create an audio feedback loop.";
 
 "Plugins" = "Plugins";
-"External" = "External (VST3)";
+"External" = "External";
 "Plugin" = "Plugin";
 "VST3 paths" = "VST3 paths";
 "Add path" = "Add path";
@@ -793,6 +793,7 @@
 
 "Create marker" = "Create marker";
 
+"Insert Elastic Point" = "Insert Elastic Point";
 "Create tempo marker" = "Create tempo marker";
 
 "Tempo marker" = "Tempo marker";
@@ -1197,6 +1198,9 @@
 "Open CatLive and enable Remote on your Mac." = "Open CatLive and enable Remote on your PC.";
 
 "Exit Remote" = "Exit Remote";
+"Exit Native?" = "Exit Native?";
+"Temporary projects will be discarded. Return to the mode selection?" = "Temporary projects will be discarded. Return to the mode selection?";
+"Close the open projects and return to the mode selection?" = "Close the open projects and return to the mode selection?";
 
 "Observer" = "Observer";
 
@@ -2356,7 +2360,10 @@
 "Bloquear tudo" = "Lock all";
 "Regiões e marcadores" = "Regions and markers";
 "Itens" = "Items";
-"Volume e pan dos itens" = "Item volume and pan";
+"Posição dos itens" = "Item position";
+"Volume dos itens" = "Item volume";
+"Pan dos itens" = "Item pan";
+"Mute dos itens" = "Item mute";
 
 "Open project location" = "Open project location";
 
@@ -2677,7 +2684,6 @@
 "Add Samplers" = "Add Samplers";
 "New note" = "New note";
 "Delete note" = "Delete note";
-"Samplers must be between 0 and 60 seconds." = "Samplers must be between 0 and 60 seconds.";
 "Do you want to save the project %@?" = "Do you want to save the project %@?";
 "Don't Save" = "Don't Save";
 "Resize Library" = "Resize Library";
@@ -2721,3 +2727,35 @@
 "Could not import SF2:" = "Could not import SF2:";
 
 "Receive Audio Transmitter" = "Receive Audio Transmitter";
+"Edit note" = "Edit note";
+"Confirm note edit" = "Confirm note edit";
+"Preview region color" = "Preview region color";
+"Custom preview region color" = "Custom preview region color";
+"Preview region scale" = "Preview region scale";
+"Preview block scale" = "Preview block scale";
+"Preview region duration scale" = "Preview region duration scale";
+"Preview block duration scale" = "Preview block duration scale";
+"Show lyrics alongside preview" = "Show lyrics alongside preview";
+
+"Stem organization in the grid" = "Stem organization in the grid";
+
+"Separated" = "Separated";
+
+"Crossfade overlapping items" = "Crossfade overlapping items";
+"Hoz Mixer All" = "All";
+"Sends" = "Sends";
+"Bus" = "Bus";
+"Standard channels" = "Standard channels";
+"Wide channels" = "Wide channels";
+"Files" = "Files";
+"Locations" = "Locations";
+"Refresh folders" = "Refresh folders";
+"Empty folder" = "Empty folder";
+"Home folder" = "Home folder";
+"Documents folder" = "Documents folder";
+"List view" = "List view";
+"Column view" = "Column view";
+"Search files" = "Search files";
+"No matching files" = "No matching files";
+"Forward" = "Forward";
+"Loading" = "Loading";

@@ -19,12 +19,13 @@ import UIKit
         for window in closing { window.close() }
     }
     func open(show: ShowController, item: UUID) {
-        guard let song = show.current, song.tracks.contains(where: { $0.clips.contains { $0.id == item && $0.midi != nil } }) else { return }
-        if let window = windows[item] { ProjectionWindow.presentWorkspaceWindow(window); return }
+        guard let track = show.current?.tracks.first(where: { $0.clips.contains { $0.id == item && $0.midi != nil } }) else { return }
+        if let window = windows[item] { window.title = track.name; ProjectionWindow.presentWorkspaceWindow(window); return }
         let window = NSWindow(contentRect: CGRect(x: 120, y: 160, width: 980, height: 610), styleMask: [.titled,.closable,.resizable,.miniaturizable], backing: .buffered, defer: false)
-        window.title = "CatLive — Piano Roll"; window.minSize = CGSize(width: 760,height: 440)
+        window.title = track.name; window.minSize = CGSize(width: 760,height: 440)
         window.isReleasedWhenClosed = false; window.delegate = self
-        window.contentView = NSHostingView(rootView: MIDIEditor(show: show, project: show.snapshot.project.id, item: item, close: { [weak window] in window?.close() }).interfaceScaled())
+        window.contentView = NSHostingView(rootView: ItemMIDIEditor(show: show, project: show.snapshot.project.id,
+            item: item, updateTitle: { [weak window] in window?.title = $0 }, close: { [weak window] in window?.close() }).interfaceScaled())
         InterfaceScaling.shared.register(window)
         windows[item] = window; window.center(); ProjectionWindow.presentWorkspaceWindow(window)
     }
@@ -34,15 +35,36 @@ import UIKit
     }
 }
 
+private struct ItemMIDIEditor: View {
+    @ObservedObject var show: ShowController
+    let project: UUID
+    let item: UUID
+    let updateTitle: (String) -> Void
+    let close: () -> Void
+    var body: some View {
+        let transport = show.snapshot.transport
+        MIDIEditor(show: show, project: project, item: item,
+            cursor: transport.playing ? transport.position : transport.editPosition ?? transport.position, updateTitle: updateTitle, close: close)
+    }
+}
+
 #endif
 
 struct RecordingPianoPreview: View {
-    @ObservedObject private var live = LiveRecordingPreview.shared
     @ObservedObject private var recorder = TrackRecording.shared
+    @ObservedObject private var selectionUpdates: ShowTrackSelectionPresentation
     @State private var manualTime: ManualTime?
     @State private var pitchOffset: Double?
     @State private var cache = PreviewProjectCache()
+    @State private var toolbar = ToolbarState()
     let show: ShowController
+    let active: Bool
+
+    init(show: ShowController, active: Bool = true) {
+        self.show = show
+        self.active = active
+        _selectionUpdates = ObservedObject(wrappedValue: show.trackSelectionPresentation)
+    }
 
     private let keyboardWidth: CGFloat = 42
     private let rulerHeight: CGFloat = 23
@@ -59,16 +81,27 @@ struct RecordingPianoPreview: View {
         let left: Double
         let cursor: Double
     }
+    private struct ToolbarState: Equatable {
+        var item: UUID?
+        var editable = false
+    }
 
     var body: some View {
+        MIDIEditor(show: show, project: show.snapshot.project.id, item: toolbar.item,
+            previewEditable: toolbar.editable, close: {}, preview: { controls in
+                active ? AnyView(playbackGrid(controls)) : AnyView(Color.clear)
+            }).accessibilityLabel("MIDI Preview")
+    }
+
+    private func playbackGrid(_ controls: MIDIPreviewEditorControls) -> some View {
         TimelinePlaybackLayer(show: show, minimumInterval: 1.0 / 30) { playback in
             let transport = show.timelinePlaybackTransport
             let playing = transport.playing || transport.paused == true
             let cursor = playing ? playback.mainPosition : transport.editPosition ?? transport.position
             let pass = recorder.midiPreviewPass(at: cursor)
-            let takes = pass?.currentPassReady == true ? live.takes.values.filter { $0.midiHistory != nil } : []
+            let takes = pass?.currentPassReady == true ? LiveRecordingPreview.shared.takes.values.filter { $0.midiHistory != nil } : []
             let song = show.current
-            let item = recorder.recording ? nil : song?.tracks.first { $0.id == show.selectedTrackForActions }?.clips
+            let item = recorder.recording ? nil : song?.tracks.first { $0.id == show.selectedTrackForActions }?.clips.lazy
                 .filter { $0.midi != nil && $0.startTime <= cursor && cursor < $0.startTime + $0.duration }
                 .max { $0.startTime < $1.startTime }
             let beat = song.map { meter in
@@ -77,12 +110,15 @@ struct RecordingPianoPreview: View {
             } ?? 0.5
             let scope = TimeScope(song: transport.songId, playing: playing, session: pass?.session, pass: pass?.index)
             let editable = !playing && !transport.subPlay.playing && !recorder.recording && item?.frozenMIDI != true
-            MIDIEditor(show: show, project: show.snapshot.project.id, item: item?.id, close: {}, preview: { controls in
-                AnyView(previewGrid(controls, playing: playing, cursor: cursor, song: song, item: item,
-                                    beat: beat, scope: scope, passStart: pass?.start, recording: recorder.recording,
-                                    editable: editable, takes: Array(takes)))
-            })
-        }.accessibilityLabel("MIDI Preview")
+            let state = ToolbarState(item: item?.id, editable: editable && item != nil)
+            previewGrid(controls, playing: playing, cursor: cursor, song: song, item: item,
+                        beat: beat, scope: scope, passStart: pass?.start, recording: recorder.recording,
+                        editable: editable, takes: Array(takes))
+                // The clock repaints the grid. Controls update at an item or
+                // playback-state boundary, keeping the toolbar out of each frame.
+                .onAppear { if toolbar != state { toolbar = state } }
+                .onChange(of: state) { toolbar = $0 }
+        }
     }
 
     private func previewGrid(_ controls: MIDIPreviewEditorControls, playing: Bool, cursor: Double, song: Song?,
@@ -94,15 +130,19 @@ struct RecordingPianoPreview: View {
                     let gridWidth = max(1, window.size.width - scrollbarSize)
                     let gridHeight = max(1, window.size.height - scrollbarSize)
                     let timeSpan = max(1, gridWidth - keyboardWidth) * beat / controls.zoom
-                    let center = timeSpan * (playing ? 0.875 : 0.5)
-                    let firstTime = playing ? min(cursor, passStart ?? 0) : -timeSpan / 2
+                    let center = timeSpan * 0.5
+                    let firstTime = playing ? min(cursor, passStart ?? -timeSpan / 2) : -timeSpan / 2
                     let lastTime = max(firstTime + timeSpan, cursor + timeSpan - center, recording ? 0 : song?.duration ?? 0)
                     let maximumLeft = max(firstTime, lastTime - timeSpan)
                     let scroll = manualTime.flatMap {
                         $0.scope == scope && (!playing || cursor + 0.03 >= $0.cursor) ? $0.left : nil
                     }
-                    let followLeft = min(maximumLeft, max(firstTime, cursor - center))
+                    let automaticLeft = playing
+                        ? cache.playbackOrigin(scope: scope, cursor: cursor, span: timeSpan)
+                        : cursor - center
+                    let followLeft = min(maximumLeft, max(firstTime, automaticLeft))
                     let left = min(maximumLeft, max(firstTime, scroll ?? followLeft))
+                    let _ = cache.rememberViewport(scope: scope, left: left)
                     let scrollTime: (Double) -> Void = { value in
                         let target = min(maximumLeft, max(firstTime, value))
                         guard abs(target - left) > 0.000001 else { return }
@@ -198,6 +238,20 @@ struct RecordingPianoPreview: View {
         private var noteValues: [MIDIPlaybackNote] = []
         private var tempo: [TimelineTempoSection] = []
         private var labels = TimelineTimeRuler.MusicalLabels(sections: [])
+        private var viewport: (scope: TimeScope, left: Double)?
+        func playbackOrigin(scope: TimeScope, cursor: Double, span: Double) -> Double {
+            // Keep the current viewport until the needle reaches its center.
+            // A seek or a new recording pass outside it reveals the new position.
+            if let viewport, viewport.scope.song == scope.song,
+               viewport.scope.session == scope.session, viewport.scope.pass == scope.pass,
+               cursor >= viewport.left, cursor < viewport.left + span {
+                return max(viewport.left, cursor - span / 2)
+            }
+            return cursor - span * 0.1
+        }
+        func rememberViewport(scope: TimeScope, left: Double) {
+            viewport = (scope, left)
+        }
         private func prepare(_ song: Song?, revision: UInt64) {
             guard songID != song?.id || self.revision != revision else { return }
             identity = nil; songID = song?.id; self.revision = revision
@@ -444,10 +498,26 @@ private struct MIDIPreviewScrollBar: NSViewRepresentable {
     }
 }
 
+final class MIDIPreviewVisibility: ObservableObject {
+    @Published private(set) var active = false
+    func setActive(_ value: Bool) {
+        if active != value { active = value }
+    }
+}
+
+struct DesktopRecordingPianoPreview: View {
+    let show: ShowController
+    @ObservedObject var visibility: MIDIPreviewVisibility
+    var body: some View {
+        RecordingPianoPreview(show: show, active: visibility.active)
+    }
+}
+
 @MainActor final class RecordingPianoWindow: NSObject, ObservableObject, NSWindowDelegate {
     @Published private(set) var detached = false
-    @Published private(set) var visible = false
+    var visible: Bool { visibility.active }
     private var panel: NSWindow?
+    let visibility = MIDIPreviewVisibility()
     func present(_ show: ShowController) {
         if panel == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 300),
@@ -455,18 +525,26 @@ private struct MIDIPreviewScrollBar: NSViewRepresentable {
             window.title = "MIDI Preview"
             window.contentMinSize = NSSize(width: 360, height: 200)
             window.isReleasedWhenClosed = false; window.delegate = self
-            window.contentView = NSHostingView(rootView: RecordingPianoPreview(show: show).interfaceScaled())
+            window.contentView = NSHostingView(rootView: DesktopRecordingPianoPreview(show: show, visibility: visibility).interfaceScaled())
             InterfaceScaling.shared.register(window)
             if !window.setFrameUsingName("CatLiveMIDIPreview") { window.center() }
             window.setFrameAutosaveName("CatLiveMIDIPreview")
             ProjectionWindow.followWorkspaceWindow(window, independent: true)
             panel = window
         }
-        detached = true; visible = true
-        if let panel { ProjectionWindow.presentWorkspaceWindow(panel) }
+        if !detached { detached = true }
+        visibility.setActive(true)
+        if let panel { ProjectionWindow.presentWorkspaceWindow(panel, activates: false) }
     }
-    func hide() { panel?.orderOut(nil); visible = false }
-    func dock() { panel?.delegate = nil; panel?.close(); panel = nil; detached = false; visible = false }
+    func hide() {
+        panel?.orderOut(nil)
+        visibility.setActive(false)
+    }
+    func dock() {
+        panel?.delegate = nil; panel?.close(); panel = nil
+        visibility.setActive(false)
+        if detached { detached = false }
+    }
     func windowShouldClose(_ sender: NSWindow) -> Bool { hide(); return false }
 }
 #endif
@@ -477,16 +555,34 @@ private enum MIDIPianoLimits {
 }
 
 private struct MIDIEditor: View {
-    @ObservedObject var show: ShowController
+    let show: ShowController
+    @ObservedObject private var projectPresentation: ShowProjectPresentation
     let project: UUID
     let item: UUID?
+    let updateTitle: ((String) -> Void)?
+    let cursor: Double
+    let previewEditable: Bool
     let close: () -> Void
-    var preview: ((MIDIPreviewEditorControls) -> AnyView)? = nil
+    let preview: ((MIDIPreviewEditorControls) -> AnyView)?
+    init(show: ShowController, project: UUID, item: UUID?, cursor: Double = 0,
+         previewEditable: Bool = false, updateTitle: ((String) -> Void)? = nil, close: @escaping () -> Void,
+         preview: ((MIDIPreviewEditorControls) -> AnyView)? = nil) {
+        self.show = show
+        _projectPresentation = ObservedObject(wrappedValue: show.projectPresentation)
+        self.project = project
+        self.item = item
+        self.updateTitle = updateTitle
+        self.cursor = cursor
+        self.previewEditable = previewEditable
+        self.close = close
+        self.preview = preview
+    }
     private var followsGrid: Bool { preview != nil }
     private static let emptyPreview = AudioClip(id: UUID(), name: "", startTime: 0, duration: 0, midi: MIDIItem())
     private var editable: Bool {
         guard let clip, clip.frozenMIDI != true, show.canControl(), !TrackRecording.shared.recording else { return false }
         guard followsGrid else { return true }
+        guard previewEditable else { return false }
         let t = show.timelinePlaybackTransport, pos = show.timelinePlaybackTransport.editPosition ?? show.timelinePlaybackTransport.position
         return !t.playing && t.paused != true && !t.subPlay.playing && row?.id == show.selectedTrackForActions && clip.startTime <= pos && pos < clip.startTime + clip.duration
     }
@@ -555,15 +651,7 @@ private struct MIDIEditor: View {
                             else if scale > zoom.lowerBound { zoomMemory = scale; scale = zoom.lowerBound }
                         }))
     }
-    private func editorTitle(_ clip: AudioClip) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "pianokeys").foregroundStyle(JarasTheme.green)
-            Text(row?.name ?? "MIDI").fontWeight(.semibold).lineLimit(1)
-            Text(clip.name).foregroundStyle(JarasTheme.secondary).lineLimit(1)
-        }
-    }
-
-    private var editorActions: some View {
+    private var creationVelocityControl: some View {
         HStack(spacing: 10) {
             #if os(iOS)
             HStack(spacing: 7) {
@@ -577,16 +665,12 @@ private struct MIDIEditor: View {
                     Image(systemName: "plus").frame(width: 29, height: 28).contentShape(Rectangle())
                 }.disabled(creationVelocity == 127).accessibilityLabel("Increase Create Velocity")
             }.disabled(!editable)
-            Divider().frame(height: 20)
             #else
             Text(verbatim: "Create Velocity")
             Stepper(value: $creationVelocity, in: 1...127) {
                 Text("\(creationVelocity)").monospacedDigit().frame(width: 30)
             }.frame(width: 75).accessibilityLabel(Text(verbatim: "Create Velocity")).disabled(!editable)
             #endif
-            Button { show.undo() } label: { Image(systemName: "arrow.uturn.backward") }.jarasHelp("Desfazer")
-            Button { show.redo() } label: { Image(systemName: "arrow.uturn.forward") }.jarasHelp("Refazer")
-            Button(show.snapshot.transport.playing ? "Pausar" : "Play") { show.send(show.snapshot.transport.playing ? .pause : .play) }
         }.fixedSize(horizontal: true, vertical: false)
     }
 
@@ -615,39 +699,16 @@ private struct MIDIEditor: View {
                         }.padding(16).frame(width:320)
                     }
                 }.fixedSize(horizontal: true, vertical: false).disabled(!editable)
-                #if os(iOS)
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 10) {
-                        editorTitle(clip).fixedSize(horizontal: true, vertical: false)
-                        Spacer(minLength: 0)
-                        editorActions
-                    }
-                    VStack(alignment: .leading, spacing: 4) {
-                        editorTitle(clip)
-                        ScrollView(.horizontal, showsIndicators: false) { editorActions }
-                    }
-                }.padding(.horizontal, 10).padding(.vertical, 6)
-                Divider()
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 12) {
-                        gridControls
-                        Spacer(minLength: 0)
-                        zoomControls.fixedSize(horizontal: true, vertical: false)
-                    }
-                    VStack(alignment: .trailing, spacing: 4) {
-                        ScrollView(.horizontal, showsIndicators: false) { gridControls }
-                        zoomControls.fixedSize(horizontal: true, vertical: false)
-                    }
-                }.padding(.horizontal, 10).padding(.vertical, 6)
-                #else
-                HStack(spacing: 10) { editorTitle(clip); Spacer(); editorActions }.padding(10)
-                Divider()
-                HStack(spacing: 12) {
-                    gridControls
-                    Spacer(minLength: 0)
+                HStack(spacing: 10) {
+                    ScrollView(.horizontal, showsIndicators: true) {
+                        HStack(spacing: 12) {
+                            gridControls
+                            creationVelocityControl
+                        }.fixedSize(horizontal: true, vertical: false)
+                    }.fixedSize(horizontal: false, vertical: true)
                     zoomControls.fixedSize(horizontal: true, vertical: false)
-                }.padding(.horizontal, 10).padding(.vertical, 8)
-                #endif
+                }.padding(.horizontal, 10).padding(.vertical, 6)
+                Divider()
                 if let preview {
                     preview(.init(zoom: scale, height: keyHeight, changeZoom: changeScale, changeHeight: changeHeight, velocity: creationVelocity, filter: channel,
                                   selected: selected, select: { selected = $0 }, commit: { notes in
@@ -658,8 +719,7 @@ private struct MIDIEditor: View {
                 #if os(macOS)
                 MIDIPianoRoll(clip: clip, selected: $selected, scale: scale, keyHeight: keyHeight, creationVelocity: creationVelocity,
                     channel: max(1, channel), channelFilter: channel, zoomChanged: changeScale, heightChanged: changeHeight,
-                    cursor: show.snapshot.transport.playing ? show.snapshot.transport.position :
-                        show.snapshot.transport.editPosition ?? show.snapshot.transport.position,
+                    cursor: cursor,
                     followsGrid: followsGrid, enabled: show.canControl() && !TrackRecording.shared.recording,
                     segments:show.current?.tempoAudioSegments(clip) ?? [clip],
                     commit:{ notes in var next=midi; next.notes=notes; show.setMIDIItem(clip.id,midi:next) },
@@ -690,6 +750,9 @@ private struct MIDIEditor: View {
                 }.font(.jarasCaption).padding(10).disabled(!editable)
             } else { Text("O item MIDI foi removido.").padding(); Button("Fechar",action:close) }
         }.background(JarasTheme.background).foregroundStyle(JarasTheme.text)
+            .onChange(of: updateTitle == nil ? nil : row?.name) { name in
+                if let name { updateTitle?(name) }
+            }
             .onChange(of:item) { _ in selected.removeAll(); quantizeOpen = false }
             .onChange(of:channel) { value in
                 selected.formIntersection((clip?.midi?.notes ?? []).filter { value == 0 || $0.channel == value }.map(\.id))
@@ -1386,6 +1449,7 @@ private struct MIDIPreviewScrollBar: View {
 #if os(iOS)
 struct IpadWorkspaceFloatingPanel<Content: View>: View {
     let title: String
+    var minimumHeight: CGFloat = 200
     let dock: () -> Void
     let close: () -> Void
     @ViewBuilder let content: () -> Content
@@ -1397,7 +1461,7 @@ struct IpadWorkspaceFloatingPanel<Content: View>: View {
     var body: some View {
         GeometryReader { viewport in
             let width = min(920, viewport.size.width)
-            let currentHeight = min(viewport.size.height, max(200, height + resize))
+            let currentHeight = min(viewport.size.height, max(minimumHeight, height + resize))
             let xLimit = max(0, viewport.size.width - width)
             let yLimit = max(0, viewport.size.height - currentHeight)
             VStack(spacing: 0) {
@@ -1419,7 +1483,7 @@ struct IpadWorkspaceFloatingPanel<Content: View>: View {
                     .frame(maxWidth: .infinity).frame(height: 16).contentShape(Rectangle())
                     .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .global)
                         .updating($resize) { drag, value, _ in value = drag.translation.height }
-                        .onEnded { drag in height = min(viewport.size.height, max(200, height + drag.translation.height)) })
+                        .onEnded { drag in height = min(viewport.size.height, max(minimumHeight, height + drag.translation.height)) })
                     .accessibilityLabel(Text("Resize \(title)"))
             }.frame(width: width, height: currentHeight)
                 .background(JarasTheme.panel)

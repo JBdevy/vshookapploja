@@ -64,7 +64,7 @@ final class TrackInstrumentIconTests: XCTestCase {
         XCTAssertTrue(show.current!.tracks[0].showsMixerComponent(.patch))
         XCTAssertNil(show.current!.tracks[1].hiddenMixerComponents)
     }
-    @MainActor func testSpecialTracksIgnoreComponentVisibilityIncludingStoredMasks() throws {
+    @MainActor func testSpecialTracksAllowVUMeterAndKeepTheirControls() throws {
         var project = Project.empty(name: "Components")
         let roles = ["teleprompt", "teleprompt2", "video", "timecode", "chords", "generatedClick", "programChange", "vinhetas"]
         let special = roles.map { role in
@@ -83,6 +83,16 @@ final class TrackInstrumentIconTests: XCTestCase {
         let ids = Set(project.songs[0].tracks.map(\.id))
         show.toggleTrackMixerComponents(ids, mask: TrackMixerComponent.phase.rawValue)
         XCTAssertFalse(show.current!.tracks[0].showsMixerComponent(.phase))
+        XCTAssertEqual(show.current!.tracks[1].hiddenMixerComponents, TrackMixerComponent.compactMask)
+        let meter = TrackMixerComponent.vuMeter.rawValue
+        XCTAssertEqual(show.current!.tracks[1].availableMixerComponents, [.vuMeter])
+        show.toggleTrackMixerComponents(ids, mask: meter, showWhenMixed: true)
+        XCTAssertEqual(show.current?.tracks.map { $0.showsMixerComponent(.vuMeter) }, [false, false])
+        XCTAssertEqual(show.hiddenTrackMixerComponents([special.last!.id]), meter)
+        let reopened = try ProjectDocumentCodec.decode(ProjectDocumentCodec.encode(show.snapshot.project))
+        XCTAssertFalse(reopened.songs[0].tracks[1].showsMixerComponent(.vuMeter))
+        show.toggleTrackMixerComponents(ids, mask: meter, showWhenMixed: true)
+        XCTAssertEqual(show.current?.tracks.map { $0.showsMixerComponent(.vuMeter) }, [true, true])
         XCTAssertEqual(show.current!.tracks[1].hiddenMixerComponents, TrackMixerComponent.compactMask)
         show.toggleAutomationLanes(special.last!.id)
         XCTAssertFalse(show.current!.tracks[1].automation!.visibleEnvelopes.isEmpty)

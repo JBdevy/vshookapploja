@@ -7,6 +7,7 @@ enum ResourceMemoryScope { case application, device }
     @Published private(set) var cpu: Double?
     @Published private(set) var ram: Double?
     @Published private(set) var totalRam: Double?
+    @Published private(set) var disk: Double?
     let memoryScope: ResourceMemoryScope
     let showsTotalMemory: Bool
     init(memoryScope: ResourceMemoryScope, showsTotalMemory: Bool) {
@@ -66,6 +67,89 @@ enum ResourceMemoryScope { case application, device }
             sample()
             do { try await Task.sleep(nanoseconds: 1_000_000_000) } catch { return }
         }
+    }
+    func runDisk() async {
+        var previous: (time: Double, occupied: Int64)?
+        while !Task.isCancelled {
+            let occupied = JarasAudioDiskOccupiedNanoseconds()
+            if occupied >= 0 {
+                let time = ProcessInfo.processInfo.systemUptime
+                if let previous, time > previous.time {
+                    let value = min(100, max(0, Double(occupied - previous.occupied) / 10_000_000 / (time - previous.time))).rounded()
+                    if value != disk { disk = value }
+                }
+                previous = (time, occupied)
+            }
+            do { try await Task.sleep(nanoseconds: 250_000_000) } catch { return }
+        }
+    }
+}
+
+@MainActor final class TransportMIDIActivity: ObservableObject {
+    static let shared = TransportMIDIActivity()
+    @Published private(set) var active = false
+    private var lastEvent = 0.0
+    private var release: Task<Void, Never>?
+
+    func receive() {
+        lastEvent = ProcessInfo.processInfo.systemUptime
+        guard !active else { return }
+        active = true
+        release = Task {
+            while !Task.isCancelled {
+                let remaining = 0.20 - (ProcessInfo.processInfo.systemUptime - lastEvent)
+                if remaining <= 0 { active = false; release = nil; return }
+                do { try await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000)) }
+                catch { return }
+            }
+        }
+    }
+}
+
+struct TransportResourceMeters: View {
+    static let width: CGFloat = 132
+    var remote = false
+    @StateObject private var usage = ResourceUsage(memoryScope: .application, showsTotalMemory: false)
+    @ObservedObject private var midi = TransportMIDIActivity.shared
+
+    var body: some View {
+        Group {
+            if remote {
+                HStack(spacing: 9) {
+                    meter("CPU", value: usage.cpu, help: "CPU used by CatLive")
+                    meter("RAM", value: usage.ram, help: "RAM used by CatLive")
+                }
+            } else {
+                HStack(spacing: 9) {
+                    VStack(spacing: 2) {
+                        meter("CPU", value: usage.cpu, help: "CPU used by CatLive")
+                        meter("RAM", value: usage.ram, help: "RAM used by CatLive")
+                    }
+                    VStack(spacing: 2) {
+                        meter("HD", value: usage.disk, help: "Audio disk read and write load", warningAt: 90)
+                        meter("MIDI", value: midi.active ? 100 : 0, help: "MIDI input activity")
+                    }
+                }
+            }
+        }.frame(width: Self.width).task { await usage.run() }
+            .task { if !remote { await usage.runDisk() } }
+    }
+
+    private func meter(_ label: String, value: Double?, help: String, warningAt: Double = .infinity) -> some View {
+        HStack(spacing: 4) {
+            Text(verbatim: label).font(.jarasSystem(size: 8, weight: .semibold))
+                .foregroundStyle(JarasTheme.secondary).frame(width: 23, alignment: .leading)
+            Capsule().fill(Color.white.opacity(0.15)).frame(height: 4)
+                .overlay(alignment: .leading) {
+                    if let value {
+                        Capsule().fill(value >= warningAt ? JarasTheme.liveOffRed : JarasTheme.green)
+                            .frame(width: (Self.width - 9 - 54) / 2 * value / 100)
+                    }
+                }
+        }.frame(height: 10)
+            .accessibilityElement(children: .ignore).accessibilityLabel(Text(verbatim: label))
+            .accessibilityValue(Text(verbatim: value.map { "\(Int($0.rounded()))%" } ?? "—"))
+            .jarasHelp(help)
     }
 }
 struct ResourceUsageView: View {

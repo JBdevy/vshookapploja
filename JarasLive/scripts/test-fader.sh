@@ -15,6 +15,7 @@ tests = Path('Tests/Apple/FaderInteractionTests.swift').read_text()
 fadeout = Path('Application/Transport/TransportFadeout.swift').read_text().split('extension ShowController {')[0]
 pan_label = source.index('func mixerPanText(')
 pan_face = source.index('enum MixerPanFace')
+tooltip = source.index('@MainActor private final class CompactTrackValueTooltip')
 color = theme.index('extension Color {')
 parts = [
     'import AppKit\nimport SwiftUI\nimport Combine',
@@ -37,10 +38,14 @@ private enum JarasTheme {
     theme[theme.index('enum JarasInterfaceTheme:'):theme.index('enum JarasTheme {')],
     theme[color:theme.index('\n}', color) + 2],
     theme[theme.index('// App-owned typography.'):],
-    meter[meter.index('@MainActor final class TrackMeterLevel:'):meter.index('/// A rounded rail clips')],
+    meter[meter.index('@MainActor final class TrackMeterLevel:'):meter.index('struct MixerFaderMeter:')],
     source[source.index('enum MixerFaderThumbStyle {'):source.index('private struct TrackVolumeFader:')],
     source[pan_face:source.index('\n}', pan_face) + 2],
     source[pan_label:source.index('\n}', pan_label) + 2],
+    '''private enum GridSelectionHeaderControls {
+    static func drawValueTooltip(_ text: String, in bounds: CGRect) {}
+}''',
+    source[tooltip:source.index('\n#endif', tooltip)],
     fadeout, source[start:end], tests,
 ]
 Path(sys.argv[1]).write_text('\n'.join(parts))

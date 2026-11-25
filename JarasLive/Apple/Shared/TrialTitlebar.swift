@@ -45,7 +45,11 @@ private final class TrialTitlebarAnchor: NSView {
         }
         let visible = text != nil
         let changed = label.isHidden == visible || label.stringValue != (text ?? "")
-        label.stringValue = text ?? ""; label.setAccessibilityHelp(text); label.isHidden = !visible
+        if changed {
+            label.stringValue = text ?? ""
+            label.setAccessibilityHelp(text)
+            label.isHidden = !visible
+        }
         layoutLabel()
         if changed, let window { NotificationCenter.default.post(name: .catliveTrialTitleChanged, object: window) }
     }

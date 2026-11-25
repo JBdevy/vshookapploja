@@ -14,6 +14,7 @@ public enum DAWAction: String, Codable, CaseIterable, Sendable {
     case toggleVideo, toggleTeleprompter, togglePreview, normalizeItems, reRenderItems, unifyAudioItems, createRegionsFromItems, createTempoMarker
     case toggleFocus, toggleLibrary, toggleSelectedInputMonitor, toggleSelectedStripFXBypass, toggleSessionFXBypass
     case toggleTracks, toggleBarMixer, toggleSetlist, toggleMultiLoopBypass
+    case insertElasticPoint
 
     public var legacyTransportMapping: Bool { self == .play || self == .stop || self == .subPlay }
     public static var visible: [Self] {
@@ -26,7 +27,7 @@ public enum DAWAction: String, Codable, CaseIterable, Sendable {
     public var needsTrack: Bool { [.selectTrack, .muteTrack, .soloTrack, .volumeTrack, .panTrack, .trackVolumeDown, .trackVolumeUp, .trackPanLeft, .trackPanRight].contains(self) }
     public var continuous: Bool { self == .volumeTrack || self == .panTrack || self == .volumeMaster }
     public var keyboardTrackAdjustment: Bool { [.trackVolumeDown, .trackVolumeUp, .trackPanLeft, .trackPanRight].contains(self) }
-    public var supportsMIDI: Bool { !keyboardTrackAdjustment && ![.normalizeItems, .reRenderItems, .unifyAudioItems, .createRegionsFromItems, .createTempoMarker, .toggleFullscreen].contains(self) }
+    public var supportsMIDI: Bool { !keyboardTrackAdjustment && ![.normalizeItems, .reRenderItems, .unifyAudioItems, .createRegionsFromItems, .createTempoMarker, .toggleFullscreen, .insertElasticPoint].contains(self) }
     public var fixedKeyboard: Bool { self == .setlistUp || self == .setlistDown }
     public var repeats: Bool { keyboardTrackAdjustment || [.tempoDown, .tempoUp, .nextRegion, .previousRegion, .nextTimelinePoint, .previousTimelinePoint].contains(self) }
     public var title: String {
@@ -77,6 +78,7 @@ public enum DAWAction: String, Codable, CaseIterable, Sendable {
         case .unifyAudioItems: return "Unify selected audio items"
         case .createRegionsFromItems: return "Create region from selected items"
         case .createTempoMarker: return "Create tempo marker"
+        case .insertElasticPoint: return "Insert Elastic Point"
         case .projectStart: return "Go to project start"
         case .projectEnd: return "Go to project end"
         case .nextRegion: return "Go to next region"
@@ -110,7 +112,7 @@ public enum DAWAction: String, Codable, CaseIterable, Sendable {
         case .tempoUp: (key, modifiers, label) = (24, shift, "+")
         case .tapTempo: return nil
         case .playStop: (key, modifiers, label) = (49, 0, "Space")
-        case .pause: return nil
+        case .pause: (key, modifiers, label) = (49, option, "⌥Space")
         case .repeatPlayback: (key, modifiers, label) = (15, 0, "R")
         case .subPlayStop: (key, modifiers, label) = (49, shift, "⇧Space")
         case .addTrack: (key, modifiers, label) = (17, command, "⌘T")
@@ -122,6 +124,7 @@ public enum DAWAction: String, Codable, CaseIterable, Sendable {
         case .normalizeItems: (key, modifiers, label) = (45, 0, "N")
         case .createRegionsFromItems: (key, modifiers, label) = (15, shift, "⇧R")
         case .createTempoMarker: (key, modifiers, label) = (17, command | shift, "⌘⇧T")
+        case .insertElasticPoint: (key, modifiers, label) = (14, option | shift, "⌥⇧E")
         case .projectStart: (key, modifiers, label) = (12, 0, "Q")
         case .projectEnd: (key, modifiers, label) = (33, 0, "[")
         case .nextRegion: (key, modifiers, label) = (2, 0, "D")

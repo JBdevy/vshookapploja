@@ -130,6 +130,7 @@ private final class WorkspaceProbe {
             for subPlaying in [false, true] {
                 let view = WorkspaceProbe(), song = view.localShow!.regions.first!
                 view.local = local
+                view.editingTracks = false
                 view.state.playing = !subPlaying; view.state.subPlaying = subPlaying
                 view.nativeKeyboardBrowsing = true
                 view.selectedSetlistEntries = [song]
@@ -139,6 +140,18 @@ private final class WorkspaceProbe {
                 expect(view.selectedSetlistEntries.isEmpty && view.setlistSelectionAnchor == nil, "Touch cannot leave blue selection during main or Sub Play")
                 expect(view.regionActions == [song], "Touch must still send its queue toggle")
             }
+        }
+        do {
+            let view = WorkspaceProbe(), show = view.localShow!
+            let first = show.regions.first!, second = UUID()
+            show.regions.insert(second)
+            view.state.playing = true
+            view.selectSetlistEntry(first, fromRow: true)
+            view.selectSetlistEntry(second, fromRow: true)
+            expect(view.selectedSetlistEntries == [first, second], "Edit adds Setlist regions by touch during playback")
+            expect(view.regionActions.isEmpty, "Edit selection never prepares or queues a song")
+            view.selectSetlistEntry(first, fromRow: true)
+            expect(view.selectedSetlistEntries == [second], "Tapping a selected region removes only that region")
         }
         for scope in [TestScrolling.SelectionScope.tracks, .grid] {
             let view = WorkspaceProbe(), show = view.localShow!
@@ -161,9 +174,30 @@ private final class WorkspaceProbe {
             let view = WorkspaceProbe(), show = view.localShow!
             let first = show.listedBlocks[0].id, last = show.listedBlocks[1].id
             view.selectSetlistEntry(first); view.hardwareModifiers = .shift; view.selectSetlistEntry(last)
+            let region = show.focusedRegion!
+            expect(view.selectedSetlistEntries == [first, last, region], "Shift range includes headers and regions")
             view.deleteNativeSelection()
-            expect(view.nativeSetlistRemoval?.ids == Set([first, last, show.focusedRegion!]), "Shift range includes visible headers and songs in list order")
-            expect(view.nativeSetlistRemoval?.blocksOnly == false, "A mixed selection must not promise to remove headers only")
+            expect(view.nativeSetlistRemoval?.ids == [first, last], "Delete in a mixed selection targets only block headers")
+            view.confirmNativeSetlistRemoval()
+            view.selectSetlistEntry(region)
+            view.deleteNativeSelection()
+            expect(view.nativeSetlistRemoval == nil && show.regions.contains(region), "Delete must not remove a region")
+            view.requestNativeRegionRemoval(region)
+            expect(view.nativeSetlistRemoval?.ids == [region], "A region can still be removed through its context action")
+        }
+        do {
+            let view = WorkspaceProbe(), show = view.localShow!
+            let region = show.focusedRegion!, other = UUID(), unselected = UUID(), block = show.listedBlocks[0].id
+            show.regions.formUnion([other, unselected])
+            view.selectedSetlistEntries = [region, other, block]
+            view.requestNativeRegionRemoval(unselected)
+            expect(view.nativeSetlistRemoval?.ids == [unselected], "The context action on an unselected region affects that region")
+            view.requestNativeRegionRemoval(region)
+            expect(view.nativeSetlistRemoval?.ids == [region, other] && view.nativeSetlistRemoval?.blocksOnly == false,
+                "The context action on a selected region captures all selected regions")
+            view.confirmNativeSetlistRemoval()
+            expect(show.deletedEntries == [[region, other]] && show.regions == [unselected],
+                "The confirmation removes the selected regions together")
         }
         for switchScope in 0..<3 {
             let view = WorkspaceProbe(), show = view.localShow!

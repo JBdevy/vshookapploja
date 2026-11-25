@@ -121,6 +121,11 @@ enum ProjectError: Error { case invalid(String) }
         oldSubPlay.keyboard = ControlInput(kind: "keyboard", label: "Enter", key: 36, modifiers: 0)
         defaults.set(try! JSONEncoder().encode([oldSubPlay]), forKey: "jaras.actions")
         let mappings = ControlMappings.shared
+        var idleChanges = 0
+        let observer = mappings.objectWillChange.sink { idleChanges += 1 }
+        mappings.endEditing()
+        observer.cancel()
+        precondition(idleChanges == 0, "Closing Settings with no active mapping must leave workspace observers idle")
         precondition(mappings.actions.binding(.subPlayStop).keyboard == DAWAction.subPlayStop.defaultKeyboard, "stored Enter defaults migrate to Shift+Space at startup")
         show.snapshot.project.songs = [MappingTestSong(tracks: [MappingTestTrack(id: track, name: "Piano")])]
         mappings.show = show

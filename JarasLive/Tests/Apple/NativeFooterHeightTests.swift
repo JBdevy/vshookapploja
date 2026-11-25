@@ -38,6 +38,14 @@ struct TransportSongDisplays {
     init(song: FooterTestSong?, transport: FooterTestTransport, focusedRegion: UUID?) {}
 }
 
+// The playlist fixture opens with notices disabled.
+struct FooterInformationDisplay: View {
+    let show: ShowController
+    let embedded: Bool
+    let alignment: Alignment
+    var body: some View { EmptyView() }
+}
+
 // INSERT_FOOTER_RESIZE_VIEW
 
 private final class FooterGeometryProbeView: NSView {
@@ -91,7 +99,7 @@ private struct FooterResizeFixture: View {
 private final class FooterKeyboardTarget: NSView, TimelineGridKeyboardTarget {
     override var acceptsFirstResponder: Bool { true }
 }
-private final class FooterMeasuredRoot<Content: View>: NSHostingView<Content> {
+private final class FooterMeasuredRoot<Content: View>: NativeWorkspaceHostingView<Content> {
     override func layout() { FooterJournal.rootLayouts += 1; super.layout() }
 }
 private func expect(_ condition: @autoclosure () -> Bool, _ message: String, line: UInt = #line) {
@@ -169,6 +177,16 @@ MainActor.assumeIsolated {
     let displayHost = parent(FooterHeightContainerView.self, of: display)!
     let scroll = descendants(NSScrollView.self, in: mixerHost).first!
     let keyboard = FooterKeyboardTarget(frame: .zero); root.addSubview(keyboard)
+    let activity = NativeSidebarResizeActivity.shared
+    activity.verticalScroll(in: window)
+    expect(activity.deferUnchangedLayout(keyboard, duringScroll: true), "scroll retains an unchanged track row")
+    expect(!activity.deferUnchangedLayout(keyboard), "scroll leaves the viewport and other controls live")
+    pump(0.08)
+    activity.verticalScroll(in: window)
+    pump(0.07)
+    expect(activity.deferUnchangedLayout(keyboard, duringScroll: true), "continued scrolling extends retention")
+    pump(0.15)
+    expect(!activity.deferUnchangedLayout(keyboard, duringScroll: true), "settling restores ordinary row layout")
     expect(window.makeFirstResponder(keyboard), "timeline keyboard target must become first responder")
     func at(_ type: NSEvent.EventType, y: CGFloat) -> NSEvent {
         NSEvent.mouseEvent(with: type, location: NSPoint(x: 200, y: y), modifierFlags: [],
@@ -184,6 +202,11 @@ MainActor.assumeIsolated {
     let mixerY = initialY(mixer)
     mixer.mouseDown(with: at(.leftMouseDown, y: mixerY))
     expect(window.firstResponder === keyboard, "resizing must preserve the timeline keyboard target")
+    expect(NativeSidebarResizeActivity.shared.canRetainTimelineHeight(in: window),
+           "Dragging the Hoz Mixer must retain the grid drawing height")
+    let pointAboveMixer = root.convert(NSPoint(x: 30, y: 80), to: root.superview)
+    expect(root.hitTest(pointAboveMixer) === mixer,
+           "Cursor refresh must reach the active handle without traversing the project")
     expect(NativeSidebarResizeActivity.shared.deferUnchangedLayout(keyboard), "footer drag must retain unchanged track controls in the same window")
     var timings: [Double] = []
     for delta in 1...60 {
@@ -212,6 +235,7 @@ MainActor.assumeIsolated {
     }
     mixer.mouseUp(with: at(.leftMouseUp, y: mixerY + 47))
     expect(!NativeSidebarResizeActivity.shared.deferUnchangedLayout(keyboard), "release must restore ordinary layout immediately")
+    expect(root.hitTest(pointAboveMixer) !== mixer, "The handle must stop owning cursor hit tests on release")
     expect(FooterJournal.mixerCommits == [273 + 47] && near(mixerHost.frame.height, 273 + 47), "mouse-up must apply and commit its own final position once")
     mixerHost.configure(storedHeight: 273, minimum: 273, maximum: 723.55859375, active: true, role: .mixer, coordinator: coordinator)
     pump()
@@ -291,4 +315,32 @@ MainActor.assumeIsolated {
     pump(0.12)
     expect(FooterJournal.rootBodies == finalRoots && mixerHost.contentAssignments + displayHost.contentAssignments == finalAssignments, "idle and completed gestures must have no delayed root work")
     print("FOOTER_RESIZE_ESCAPE_MODAL_WINDOW_HIDE_DETACH_CURSOR_FOCUS_AND_IDLE_QUIETUDE_OK")
+}
+
+MainActor.assumeIsolated {
+    let coordinator = FooterVerticalResizeCoordinator()
+    let mixer = FooterHeightContainerView()
+    let midiPreview = FooterHeightContainerView()
+    coordinator.configureMixerBudget(640)
+    mixer.configure(storedHeight: 450, minimum: 273, maximum: 720, active: true,
+        role: .mixer, coordinator: coordinator)
+    midiPreview.configure(storedHeight: 273, minimum: 273, maximum: 500, active: true,
+        role: .midiPreview, coordinator: coordinator)
+    midiPreview.setContent(identity: "preview", environment: EnvironmentValues()) { AnyView(FooterScrollProbe()) }
+    expect(mixer.effectiveHeight == 367, "MIDI Preview leaves only available height for Hoz Mixer")
+    midiPreview.previewHeight(430)
+    expect(midiPreview.effectiveHeight == 430 && mixer.effectiveHeight == 210,
+           "Dragging MIDI Preview reallocates native height before the save")
+    midiPreview.finishHeight(commit: false)
+    expect(midiPreview.effectiveHeight == 273 && mixer.effectiveHeight == 367,
+           "A cancelled drag restores both panels to their saved sizes")
+    midiPreview.configure(storedHeight: 273, minimum: 273, maximum: 500, active: false,
+        role: .midiPreview, coordinator: coordinator)
+    expect(midiPreview.effectiveHeight == 0 && mixer.effectiveHeight == 450,
+           "Closing MIDI Preview releases its space without changing the saved mixer size")
+    midiPreview.configure(storedHeight: 273, minimum: 273, maximum: 500, active: true,
+        role: .midiPreview, coordinator: coordinator)
+    midiPreview.setContent(identity: "preview", environment: EnvironmentValues()) { AnyView(FooterScrollProbe()) }
+    expect(midiPreview.contentAssignments == 1, "Reopening MIDI Preview keeps the editor toolbar and zoom state")
+    print("DOCKED_MIDI_PREVIEW_NATIVE_HEIGHT_COORDINATION_AND_CANCEL_OK")
 }

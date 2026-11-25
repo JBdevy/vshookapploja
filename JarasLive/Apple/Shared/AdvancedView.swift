@@ -304,7 +304,7 @@ struct TempoMarkerEditor: View {
 private struct AdvancedMixerSettings: View {
     @AppStorage private var style: MixerTrackStyle
 
-    init(key: String) { _style = AppStorage(wrappedValue: .standard, key) }
+    init(key: String) { _style = AppStorage(wrappedValue: MixerTrackStyle.defaultStyle, key) }
 
     var body: some View {
         HStack {
@@ -332,8 +332,10 @@ private struct AdvancedTimelineSettings: View {
     @State private var confirmingCleanup = false
     @State private var showingMP3Conversion = false
     @AppStorage(JarasInterfaceTheme.preferenceKey) private var interfaceTheme = JarasInterfaceTheme.defaultTheme
+    @AppStorage(StemLayoutPreferences.stackedKey) private var stackedStems = StemLayoutPreferences.stackedDefault
+    @AppStorage(StemLayoutPreferences.crossfadeKey) private var crossfadeOverlaps = false
     @AppStorage("jaras.timeline.continuousScroll") private var continuousScroll = false
-    @AppStorage("jaras.timeline.invertWaveformColors") private var invertWaveformColors = false
+    @AppStorage(TimelineAppearanceDefaults.invertWaveformColorsKey) private var invertWaveformColors = TimelineAppearanceDefaults.invertWaveformColors
     @AppStorage("jaras.timeline.gridlines") private var gridlines = GlobalProjectTiming.load()?.settings.divisions != 0
     init(show: ShowController, documents: ProjectDocuments?) {
         self.show = show; self.documents = documents
@@ -365,6 +367,20 @@ private struct AdvancedTimelineSettings: View {
                     Text("Inverted").tag(true)
                 }.labelsHidden()
             }
+            HStack {
+                Text("Stem organization in the grid"); Spacer()
+                Picker("Stem organization in the grid", selection: $stackedStems) {
+                    Text(verbatim: "Crossfader").tag(true)
+                    Text("Separated").tag(false)
+                }.labelsHidden()
+            }.onChange(of: stackedStems) { _ in show.stemPreferencesChanged() }
+            HStack {
+                Text("Crossfade overlapping items"); Spacer()
+                Picker("Crossfade overlapping items", selection: $crossfadeOverlaps) {
+                    Text("Enabled").tag(true)
+                    Text("Disabled").tag(false)
+                }.labelsHidden()
+            }.onChange(of: crossfadeOverlaps) { _ in show.stemPreferencesChanged() }
             SetlistTextColorRow(title: "Timeline background", swatch: .background, theme: interfaceTheme)
             SetlistTextColorRow(title: "Vertical grid color", swatch: .verticalGrid, theme: interfaceTheme)
             SetlistTextColorRow(title: "Horizontal grid color", swatch: .horizontalGrid, theme: interfaceTheme)

@@ -64,7 +64,7 @@ MainActor.assumeIsolated {
         let track = Track(automation: TrackAutomation(envelopes: Array(repeating: .init(), count: envelopeCount)))
         let layout = TrackRowLayout(tracks: [track], baseHeight: 96)
         let (audio, envelope) = retainedMixerHeights(layout, index: 0, slotHeight: layout.heights[0])
-        precondition(audio == layout.audioHeights[0] && envelope == layout.envelopeHeights[0],
+        precondition(audio == layout.audioHeights[0] && envelope == (envelopeCount == 0 ? 0 : layout.envelopeHeights[0]),
                      "Visible controls occupy the full audio row regardless of envelope count")
         for retainedHeight: CGFloat in [24,64,240] {
             let (audio, envelope) = retainedMixerHeights(layout, index: 0, slotHeight: retainedHeight)
@@ -113,6 +113,8 @@ MainActor.assumeIsolated {
     let withEnvelope = snapshotCache.layout([automated, second], height: 64, key: unchangedKey)
     precondition(withEnvelope.audioHeights == beforeInsert.heights && withEnvelope.envelopeCounts == [2, 0])
     precondition(abs(withEnvelope.envelopeHeights[0] * 3 - beforeInsert.heights[0]) < 1e-9)
+    precondition(beforeInsert.visibleEnvelopeHeight(at: 0) == 0)
+    precondition(withEnvelope.visibleEnvelopeHeight(at: 0) == withEnvelope.envelopeHeights[0])
     precondition(abs(withEnvelope.heights[0] - beforeInsert.heights[0] * (1 + 2.0 / 3)) < 1e-9 && withEnvelope.offsets[1] == withEnvelope.heights[0])
     automated.automation?.lanesVisible = false
     let hidden = snapshotCache.layout([automated, second], height: 64, key: unchangedKey)

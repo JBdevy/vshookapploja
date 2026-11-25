@@ -209,7 +209,7 @@ struct MultitrackRegionData: Codable, Sendable {
                 if routing.mainReceiveSlot != nil { routing.receives = routing.receives.map { $0.flatMap { trackIDs.contains($0) ? $0 : nil } } }
                 else { routing.receives = routing.receives.filter { $0.map(trackIDs.contains) ?? false } }
                 routing.transmitters = routing.transmitters.filter { $0.map(trackIDs.contains) ?? false }
-                routing.removeUnusedSendTaps()
+                routing.removeUnusedSendSettings()
                 track.routing = routing
             }
             track.automation?.mapTimelineTimes { max(0, $0 + shift) }
@@ -739,7 +739,10 @@ enum StemProjectImporter {
                             receives: routing.receives.compactMap { $0.flatMap { rawTargets.contains($0) ? targets[$0] : nil } }.map(Optional.some),
                             transmitters: routing.transmitters.compactMap { $0.flatMap { rawTargets.contains($0) ? targets[$0] : nil } }.map(Optional.some))
                         for source in routing.transmitters.compactMap({ $0 }) where rawTargets.contains(source) {
-                            if let destination = targets[source] { mapped.setSendTap(routing.sendTap(to: source), to: destination) }
+                            if let destination = targets[source] {
+                                mapped.setSendTap(routing.sendTap(to: source), to: destination)
+                                mapped.setSendGain(routing.sendGain(to: source), to: destination)
+                            }
                         }
                         track.routing = mapped
                     }

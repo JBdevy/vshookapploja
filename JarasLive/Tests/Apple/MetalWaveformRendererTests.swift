@@ -74,6 +74,23 @@ precondition(!linearFrame.hasSameContent(as: MetalWaveformFrame(size: size, stro
 precondition(engine.uploadedBufferCount == fadeUploads, "Dragging fades must reuse source audio vertices")
 print("METAL_WAVEFORM_FADE_IN_OUT_FINE_CURVES_AND_SPARSE_PCM_PIXELS_OK")
 
+let amplifiedPCM = TimelineAudioWaveform.VertexBlock(channels: [[
+    SIMD2<Float>(0, 0), SIMD2<Float>(20, -1), SIMD2<Float>(40, -1),
+    SIMD2<Float>(60, 1), SIMD2<Float>(80, 1), SIMD2<Float>(100, 0)
+]], start: 0, end: 101, step: 1, rate: 1, key: "amplified-pcm")
+let boundedStroke = MetalWaveformStroke(block: amplifiedPCM, channel: 0, scale: SIMD2(1, 80),
+    translation: SIMD2(10, 64), clip: CGRect(x: 10, y: 24, width: 108, height: 80),
+    color: SIMD4(repeating: 1), itemRect: item, lineWidth: 1, amplitudeBounds: SIMD2(25, 103))
+for density: Float in [1, 2] {
+    let pixels = render([boundedStroke], density: density)
+    precondition(pixels.maximumAlpha(Int(40 * density), Int(25 * density)) > 120,
+        "Amplified negative PCM keeps a visible contour at the top of its channel")
+    precondition(pixels.maximumAlpha(Int(80 * density), Int(103 * density)) > 120,
+        "Amplified positive PCM keeps a visible contour at the bottom of its channel")
+    precondition(pixels.maximumAlpha(Int(40 * density), Int(19 * density)) == 0)
+}
+print("METAL_AMPLIFIED_PCM_CONTOUR_STAYS_IN_CHANNEL_OK")
+
 // Per-channel pan changes presentation, retaining the original PCM buffers.
 let panBlock = TimelineAudioWaveform.VertexBlock(channels: [[SIMD2<Float>(0, -1), SIMD2<Float>(100, -1)],
     [SIMD2<Float>(0, -1), SIMD2<Float>(100, -1)]], start: 0, end: 101, step: 1, rate: 1, key: "pan-stereo-pcm")

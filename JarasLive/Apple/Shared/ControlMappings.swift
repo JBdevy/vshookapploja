@@ -52,6 +52,9 @@ struct MappingTransferRequest: Identifiable {
     @Published var editing: MappingEdit? {
         didSet { if transferRequest?.editID != editing?.id { transferRequest = nil } }
     }
+    func endEditing() {
+        if editing != nil { editing = nil }
+    }
     @Published private(set) var transferRequest: MappingTransferRequest?
     @Published var mode = "keyboard"
     @Published var candidate: ControlInput?
@@ -98,6 +101,15 @@ struct MappingTransferRequest: Identifiable {
     private init() {
         if let data = UserDefaults.standard.data(forKey: "jaras.controlMappings"), let stored = try? JSONDecoder().decode([MappedControl].self, from: data) { mappings = stored }
         if let data = UserDefaults.standard.data(forKey: "jaras.actions"), let stored = try? JSONDecoder().decode([DAWActionBinding].self, from: data) { actions = DAWActionBindings(stored: stored) }
+        let pauseDefaultMigrated = "catlive.actions.pauseDefaultV1"
+        if !UserDefaults.standard.bool(forKey: pauseDefaultMigrated) {
+            if let shortcut = DAWAction.pause.defaultKeyboard, actions.binding(.pause).keyboard == nil,
+               !mappings.contains(where: { $0.input.matches(shortcut) }),
+               actions.setInput(shortcut, action: .pause, kind: "keyboard") {
+                persistActions()
+            }
+            UserDefaults.standard.set(true, forKey: pauseDefaultMigrated)
+        }
     }
     var current: [MappedControl] { mappings.filter { $0.globalSetlistBlockNumber != nil || $0.project == show?.snapshot.project.id } }
     func bind(_ show: ShowController, session: UUID? = nil) {
@@ -425,6 +437,7 @@ struct MappingTransferRequest: Identifiable {
     }
     private func receive(endpoint: MIDIEndpointRef, status: UInt8, number: UInt8, value: UInt8, timestamp: Double = ProcessInfo.processInfo.systemUptime) {
         guard let source = sources[endpoint] else { return }
+        TransportMIDIActivity.shared.receive()
         if SMK37Link.shared.claims(device: source.id, status: status, number: number) { return }
         if status & 0xf0 == 0xc0 {
             receiveProgramChange(device: source.id, status: status, number: number)

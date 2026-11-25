@@ -25,5 +25,15 @@ public class RemoteItemDrawingTest {
  @Test public void compactItemsDoNotDrawWaveOverTheirHeader()throws Exception{
   CanvasProbe canvas=new CanvasProbe();drawing.draw(canvas,new RectF(0,0,100,20),new JSONObject(),new JSONObject().put("id","A"),0,1);assertEquals(0,canvas.paths);assertEquals(0,drawing.builds);
  }
+ @Test public void invertedWaveformUsesTheTrackColor()throws Exception{
+  JSONObject track=new JSONObject().put("color",0x4688c0).put("nameColor",0xffffff);
+  JSONObject clip=new JSONObject().put("id","A").put("name","Audio");
+  CanvasProbe canvas=new CanvasProbe();
+  drawing.draw(canvas,new RectF(0,0,160,80),track,clip,0,1,true,true);
+  assertEquals(0xff4688c0,canvas.waveColor);
+  track.put("silenced",true);
+  drawing.draw(canvas,new RectF(0,0,160,80),track,clip,0,1,true,true);
+  assertEquals(0xff808080,canvas.waveColor);
+ }
  @Test public void zoomCacheIsBounded(){for(int i=0;i<300;i++)drawing.waveform("A",100+i,60,0,1);assertEquals(96,drawing.waves.size());}
 }

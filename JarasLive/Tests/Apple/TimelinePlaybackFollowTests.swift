@@ -111,6 +111,7 @@ MainActor.assumeIsolated {
     precondition(close(scroll.contentView.bounds.minX, 0), "applying leaves SwiftUI's update stack")
     flush()
     precondition(close(scroll.contentView.bounds.minX, 10), "uses the 800-point clip, independent of 1700-point window and sidebars")
+    precondition(preparedOrigins.count == 1, "A playback frame prepares its horizontal destination once")
     precondition(close(scroll.contentView.bounds.minY, 30), "horizontal follow preserves vertical scrolling")
     update(200); update(210); flush()
     precondition(close(scroll.contentView.bounds.minX, 1700), "one queued operation consumes the latest presentation sample")
@@ -195,17 +196,12 @@ MainActor.assumeIsolated {
     scroll.playbackFollowSuspendedUntil = ProcessInfo.processInfo.systemUptime - 0.01
     update(601, scale: 8, width: 8000, source: "song/logical"); flush()
     precondition(scroll.isPlaybackFollowing, "After the idle period, scrolling resumes and hides headers")
-    let heldOrigin = scroll.contentView.bounds.minX
-    TimelineFollowPointerProbe.buttons = 1
+    let followingOrigin = scroll.contentView.bounds.minX
     scroll.playbackFollowSuspendedUntil = 0
     update(602, scale: 8, width: 8000, source: "song/logical"); flush()
     update(603, scale: 8, width: 8000, source: "song/logical"); flush()
-    precondition(scroll.contentView.bounds.minX == heldOrigin && !scroll.isPlaybackFollowing,
-        "A stationary held mouse press suspends follow after the idle timer expires and reveals item controls")
-    TimelineFollowPointerProbe.buttons = 0
-    update(604, scale: 8, width: 8000, source: "song/logical"); flush()
-    precondition(scroll.contentView.bounds.minX > heldOrigin && scroll.isPlaybackFollowing,
-        "Releasing the mouse lets continuous follow resume")
+    precondition(scroll.contentView.bounds.minX > followingOrigin && scroll.isPlaybackFollowing,
+        "The viewport follows independently of unrelated input")
     update(nil)
     precondition(!scroll.isPlaybackFollowing, "Stop reveals item headers")
     print("PLAYBACK_FOLLOW_RETAINED_CAPACITY_LOGICAL_READINESS_AND_END_OK")

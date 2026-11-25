@@ -110,10 +110,12 @@ for scale: CGFloat in [1, 2] {
                  gridLayer.path!.boundingBoxOfPath.maxY == controller.value.rulerHeight,
                  "Primary grid lines begin at the numbers below the optional lanes")
     precondition(ticksLayer.path!.boundingBoxOfPath.minY >= headerBands.numberTop + rulerNumberLaneHeight)
-    precondition(headerBands.markerTop(tempo: false) == markerLaneHeight)
-    precondition(headerBands.tempoTop == 2 * markerLaneHeight)
-    precondition(headerBands.numberTop == 3 * markerLaneHeight)
-    precondition(headerBands.separators == [0.5, 15.5, 31.5, 47.5, 63.5, 79.5])
+    precondition(headerBands.markerTop(tempo: false) == 24)
+    precondition(headerBands.tempoTop == 48)
+    precondition(headerBands.numberTop == 48)
+    precondition(headerBands.markerTop(tempo: true) == headerBands.numberTop,
+                 "Tempo heads share the lane used by ruler numbers")
+    precondition(headerBands.separators == [0.5, 23.5, 47.5, 63.5, 79.5])
     let gridBeforeVertical = controller.backdrop.fixtureUpdates
     for y: CGFloat in [8, 20, 5, 0] {
         viewport.origin.y = y; controller.project(viewport)

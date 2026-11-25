@@ -19,11 +19,13 @@ def declaration(marker):
     return source[start:end].replace('private func ', 'func ', 1).replace('private struct ', 'struct ', 1)
 fixture = Path('Tests/Apple/IpadSetlistBlockDeletionTests.swift').read_text()
 fixture = fixture.replace('// PRODUCTION_NATIVE_SETLIST_REMOVAL', declaration('private struct NativeSetlistRemoval'))
-methods = ['selectSetlistEntry', 'prepareNativeSetlistDrag', 'deleteNativeSelection', 'requestNativeSetlistRemoval', 'confirmNativeSetlistRemoval', 'remoteSetlistBlockNumber', 'performRemoteBlockMIDI']
+methods = ['selectSetlistEntry', 'prepareNativeSetlistDrag', 'deleteNativeSelection', 'requestNativeRegionRemoval', 'requestNativeSetlistRemoval', 'confirmNativeSetlistRemoval', 'remoteSetlistBlockNumber', 'performRemoteBlockMIDI']
 if 'private func resetSetlistBrowsing(' in source:
     methods.append('resetSetlistBrowsing')
     fixture = fixture.replace('nativeKeyboardBrowsing', 'setlistBrowsing')
-fixture = fixture.replace('// PRODUCTION_NATIVE_SETLIST_ACTIONS', '\n'.join(declaration('private func ' + name + '(') for name in methods))
+actions = [declaration('private var editingSetlistSelection:')]
+actions += [declaration('private func ' + name + '(') for name in methods]
+fixture = fixture.replace('// PRODUCTION_NATIVE_SETLIST_ACTIONS', '\n'.join(actions))
 block_row = declaration('private func setlistBlockRow(')
 assert 'NativeSetlistDragHandle(enabled: editingTracks' in block_row and 'prepareNativeSetlistDrag(block.id)' in block_row, 'Block rows must start the same native drag as songs'
 assert 'IpadSetlistDropTarget' in block_row and 'target: block.id' in block_row and '.onDrop' in Path('Apple/Shared/IpadStandaloneWorkspace.swift').read_text().split('struct IpadSetlistDropTarget:')[1].split('struct IpadSetlistDrop:')[0], 'Block rows must also accept before/after drops'

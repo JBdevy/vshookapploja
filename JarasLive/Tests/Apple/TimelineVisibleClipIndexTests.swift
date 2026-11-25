@@ -61,6 +61,12 @@ func expected(_ intervals: [(start: Double, end: Double)], from: Double, through
         }
 
         // Prove ordinary sparse sessions do not scan all prior clips per frame.
+        let stacked = [(0.0, 10.0), (3.0, 7.0), (4.0, 9.0), (10.0, 12.0)]
+        let coverage = TimelineVisibleClipIndex(intervals: stacked)
+        precondition(coverage.uncoveredParts(start: 0, end: 10, above: 0) { stacked[$0] } == [0..<3, 9..<10])
+        precondition(coverage.uncoveredParts(start: 3, end: 7, above: 1) { stacked[$0] } == [3..<4])
+        precondition(coverage.uncoveredParts(start: 4, end: 7, above: 1) { stacked[$0] } == [])
+        precondition(coverage.uncoveredParts(start: 4, end: 9, above: 2) { stacked[$0] } == nil)
         let longSession = (0..<100_000).map { (start: Double($0 * 4), end: Double($0 * 4 + 2)) }
         let largeIndex = TimelineVisibleClipIndex(intervals: longSession)
         let query = 350_000.0

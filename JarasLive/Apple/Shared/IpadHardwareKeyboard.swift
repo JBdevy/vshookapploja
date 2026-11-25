@@ -81,6 +81,7 @@ final class IpadHardwareKeyboardView: UIView {
         observer.observe = { [weak self] point, flags in
             guard let self, let window = self.window,
                   self.convert(self.bounds, to: window).contains(point) else { return }
+            LibraryKeyboardTarget.pointer(at: point)
             self.setModifiers(.init(rawValue: UInt(bitPattern: flags.rawValue)))
             self.scheduleFocus()
         }
@@ -121,6 +122,7 @@ final class IpadHardwareKeyboardView: UIView {
         modifiers = value; onModifiersChanged(value)
     }
     private func releaseKeys(deferModifiers: Bool = false) {
+        LibraryKeyboardTarget.finishHardwareArrow(commit: false)
         stopRepeating(); pressed.removeAll(); handled.removeAll()
         if deferModifiers, !modifiers.isEmpty {
             modifiers = []

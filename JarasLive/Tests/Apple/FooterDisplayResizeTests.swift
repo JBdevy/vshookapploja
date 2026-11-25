@@ -17,6 +17,9 @@ MainActor.assumeIsolated {
                            windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
     }
     view.mouseDown(with: event(.leftMouseDown, y: 12))
+    view.mouseUp(with: event(.leftMouseUp, y: 12))
+    precondition(committed == nil && values.isEmpty && !view.cursorPushed, "Clicking the footer must not start or commit a resize")
+    view.mouseDown(with: event(.leftMouseDown, y: 12))
     view.mouseDragged(with: event(.leftMouseDragged, y: 112))
     precondition(values.last == 127)
     view.height = 127; view.setFrameSize(NSSize(width: 400, height: 127))

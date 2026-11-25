@@ -113,14 +113,21 @@ typealias ProjectionImage = UIImage
         let host = NSHostingView(rootView: VideoSurface(controller: self))
         if #available(macOS 13, *) { host.sizingOptions = [] }
         window.contentView = host
-        window.restorePlacement(key: "jaras.videoWindow"); ProjectionWindow.presentWorkspaceWindow(window)
+        window.restorePlacement(key: "jaras.videoWindow")
+        ProjectionWindow.presentWorkspaceWindow(window, activates: false)
         self.window = window; visible = true
-        if let snapshot { update(snapshot, revision: snapshotRevision) }
+        DispatchQueue.main.async { [weak self, weak window] in
+            guard let self, let window, self.window === window, let snapshot = self.snapshot else { return }
+            self.update(snapshot, revision: self.snapshotRevision)
+        }
     }
     func windowWillClose(_ notification: Notification) {
-        visible = false
-        if !active { reset() }
-        window?.contentView = nil; window = nil
+        guard let closed = notification.object as? NSWindow, window === closed else { return }
+        visible = false; window = nil
+        DispatchQueue.main.async { [weak self] in
+            closed.contentView = nil
+            if let self, !self.active { self.reset() }
+        }
     }
     #else
     func toggle() { setVisible(!visible) }
@@ -456,17 +463,18 @@ struct IpadNativeVideoButton: View {
 struct IpadNativeVideoPanel: View {
     let leading: CGFloat
     let trailing: CGFloat
+    let dockedChanged: (Bool) -> Void
     private let video = VideoPlayback.shared
     @State private var visible = false
     @State private var origin: CGPoint?
     @State private var fullscreen = false
     @GestureState private var drag = CGSize.zero
+    private var floating: Bool { IpadVideoWindowCapability.supportsExtendedDisplay && !fullscreen }
     var body: some View {
         GeometryReader { geometry in
             if visible {
-                let floating = IpadVideoWindowCapability.supportsExtendedDisplay && !fullscreen
-                let insetLeading = min(leading, geometry.size.width * 0.40)
-                let insetTrailing = min(trailing, geometry.size.width * 0.40)
+                let insetLeading = min(leading, geometry.size.width)
+                let insetTrailing = min(trailing, geometry.size.width - insetLeading)
                 let width = fullscreen ? geometry.size.width : floating
                     ? min(480, max(240, geometry.size.width * 0.55), geometry.size.width)
                     : max(0, geometry.size.width - insetLeading - insetTrailing)
@@ -502,6 +510,7 @@ struct IpadNativeVideoPanel: View {
                 visible = value
                 if !value { fullscreen = false }
             }
+            .onChange(of: visible && !floating, perform: dockedChanged)
     }
 }
 #endif

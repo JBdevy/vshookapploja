@@ -190,3 +190,26 @@ linkedA.mouseDragged(with: event(.leftMouseDragged, 130))
 precondition(abs(linkedB.doubleValue - (linkedA.doubleValue + 0.2)) < 0.000001, "Selected pan follows live without becoming the inverse unless linked")
 linkedA.mouseUp(with: event(.leftMouseUp, 130))
 print("SELECTED_TRACK_FADER_AND_PAN_LIVE_MIRROR_BEFORE_RELEASE_OK")
+
+MainActor.assumeIsolated {
+    let verticalMeterSlider = DirectVolumeSliderView(frame: NSRect(x: 0, y: 0, width: 32, height: 150))
+    verticalMeterSlider.vertical = true
+    verticalMeterSlider.synchronizeModel(0)
+    window.contentView!.addSubview(verticalMeterSlider)
+    let sliderMeter = TrackMeterLevel()
+    verticalMeterSlider.bindMeter(sliderMeter)
+    let faderBacking = verticalMeterSlider.layer!.sublayers!.first!
+    let railBacking = faderBacking.sublayers!.first!
+    let thumbBacking = faderBacking.sublayers![2]
+    let thumbBeforeRelease = thumbBacking.frame
+    let firstMeterChannel = (railBacking.sublayers!.first as! CAGradientLayer).mask!.sublayers!.first!
+    verticalMeterSlider.needsDisplay = false
+    sliderMeter.update(left: 0.5, right: 0.25, elapsed: 1.0 / 30)
+    let meterHeight = firstMeterChannel.frame.height
+    precondition(meterHeight > 0 && meterHeight < railBacking.frame.height)
+    precondition(firstMeterChannel.frame.maxY == railBacking.bounds.maxY)
+    sliderMeter.update(peak: 0, elapsed: 1.0 / 30)
+    precondition(firstMeterChannel.frame.height < meterHeight)
+    precondition(thumbBacking.frame == thumbBeforeRelease && !verticalMeterSlider.needsDisplay)
+    print("VERTICAL_FADER_RELEASE_UPDATES_LAYERS_WITHOUT_REPAINT_OK")
+}

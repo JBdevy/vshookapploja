@@ -74,12 +74,14 @@ enum PadAudioBuffer {
     private var audioImports: [Int: UUID] = [:]
     private var padSampleGeneration = 0
     func bind(show: ShowController) {
-        self.show = show
         #if os(macOS)
-        self.audio = DesktopProjectTabs.shared.audio(for: show)
+        let engine = DesktopProjectTabs.shared.audio(for: show)
         #else
-        self.audio = StemAudioPlayback.shared
+        let engine = StemAudioPlayback.shared
         #endif
+        if self.show === show, self.audio === engine { return }
+        self.show = show
+        self.audio = engine
         startVoice = { [weak self] voice, url, volume in
             guard let self else { return }
             guard let track = self.show?.current?.tracks.first(where: { $0.role.rawValue == "vinhetas" }) else {
@@ -715,14 +717,15 @@ private struct VinhetasPadSurface: NSViewRepresentable {
     private var window: NSWindow?
     func open(show: ShowController) {
         VinhetasController.shared.bind(show: show)
-        if let window { window.makeKeyAndOrderFront(nil); visible = true; WorkspaceLayoutPreferences.storage.set(true, forKey: "jaras.layout.vinhetas.visible"); return }
+        if let window { ProjectionWindow.presentWorkspaceWindow(window, activates: false); visible = true; WorkspaceLayoutPreferences.storage.set(true, forKey: "jaras.layout.vinhetas.visible"); return }
         let panel = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 260), styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
         panel.title = "CatLive · Vinhetas"; panel.isReleasedWhenClosed = false; panel.delegate = self
         panel.minSize = NSSize(width: 850, height: 260)
         panel.contentView = NSHostingView(rootView: VinhetasPanel(createTrack: { _ = show.createVinhetasTrack() }).interfaceScaled())
         if !panel.setFrameUsingName("CatLiveVinhetas", force: true) { panel.center() }
         panel.setFrameAutosaveName("CatLiveVinhetas"); window = panel; detached = true; visible = true
-        panel.makeKeyAndOrderFront(nil)
+        ProjectionWindow.followWorkspaceWindow(panel)
+        ProjectionWindow.presentWorkspaceWindow(panel, activates: false)
         WorkspaceLayoutPreferences.storage.set(true, forKey: "jaras.layout.vinhetas.detached")
         WorkspaceLayoutPreferences.storage.set(true, forKey: "jaras.layout.vinhetas.visible")
     }

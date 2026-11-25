@@ -108,7 +108,13 @@ struct PluginScanRecord: Codable, Sendable {
         scanProgress = nil; currentPlugin = ""; completedPlugins = 0; totalPlugins = 0
         let paths = self.paths, cache = scanCache, previousPlugins = plugins, timeout = scanTimeout
         let worker = Task.detached(priority: .utility) { () -> ([RecognizedPlugin], [String], Bool) in
-                var files = Set<URL>(), found: [RecognizedPlugin] = [], errors: [String] = []
+                var files = Set<URL>(), errors: [String] = []
+                var found = JarasVST3.installedAudioUnits().compactMap { item -> RecognizedPlugin? in
+                    guard let id = item["classID"] as? String, let name = item["name"] as? String,
+                          let path = item["path"] as? String, let vendor = item["vendor"] as? String,
+                          let category = item["category"] as? String else { return nil }
+                    return RecognizedPlugin(classID: id, name: name, path: path, vendor: vendor, category: category)
+                }
                 let fm = FileManager.default
                 for path in paths where !Task.isCancelled {
                     let root = URL(fileURLWithPath: path).standardizedFileURL
@@ -332,7 +338,7 @@ struct ExternalPluginBrowser: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("External (VST3)").font(.jarasHeadline)
+                Text("External (VST3 / AU)").font(.jarasHeadline)
                 Spacer()
                 Button(action: close) { Image(systemName: "xmark").frame(width: 32, height: 32).contentShape(Rectangle()) }
                     .buttonStyle(.plain).jarasHelp("Close")
@@ -447,7 +453,7 @@ struct ExternalPluginBrowserPresenter: NSViewRepresentable {
                 coordinator.opening = false
                 let panel = NSPanel(contentRect: CGRect(x: 0, y: 0, width: 680, height: 560),
                                     styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
-                panel.title = JarasLocalization.string("External (VST3)")
+                panel.title = JarasLocalization.string("External (VST3 / AU)")
                 panel.isFloatingPanel = false
                 panel.hidesOnDeactivate = false
                 panel.minSize = CGSize(width: 620, height: 390)

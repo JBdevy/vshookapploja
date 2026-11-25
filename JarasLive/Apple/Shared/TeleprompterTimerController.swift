@@ -75,13 +75,20 @@ import AppKit
     }
     func showConfiguration() {
         #if os(macOS)
-        if let configuration { configuration.makeKeyAndOrderFront(nil); return }
+        if let configuration {
+            configuration.title = JarasLocalization.string("Timer")
+            configuration.contentView?.isHidden = false
+            ProjectionWindow.presentWorkspaceWindow(configuration, activates: false)
+            if !configurationOpen { configurationOpen = true }
+            return
+        }
         let panel = NSPanel(contentRect: NSRect(x: 0,y: 0,width: 380,height: 445),styleMask: [.titled,.closable],backing: .buffered,defer: false)
         panel.title = JarasLocalization.string("Timer")
         panel.contentMinSize = NSSize(width: 340,height: 240); panel.level = .normal; panel.isReleasedWhenClosed = false
         panel.delegate = self
         panel.contentView = NSHostingView(rootView: LocalizedTeleprompterTimer(controller: self))
-        configuration = panel; panel.center(); panel.makeKeyAndOrderFront(nil)
+        configuration = panel; panel.center()
+        ProjectionWindow.presentWorkspaceWindow(panel, activates: false)
         configurationOpen = true
         #endif
     }
@@ -91,7 +98,9 @@ import AppKit
 extension TeleprompterTimerController: NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         guard notification.object as? NSWindow === configuration else { return }
-        configuration?.contentView = nil; configuration = nil
+        DispatchQueue.main.async { [weak configuration] in
+            if let configuration, !configuration.isVisible { configuration.contentView?.isHidden = true }
+        }
         configurationOpen = false
     }
 }

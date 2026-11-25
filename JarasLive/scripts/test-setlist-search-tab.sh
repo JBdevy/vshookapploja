@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 source = Path('Apple/Shared/SongListView.swift').read_text()
 start = source.index('final class SetlistKeyView:')
-keys = source[start:source.index('\n#endif', start)]
+keys = 'enum LibraryKeyboardArea { static func handle(_ event: NSEvent) -> Bool { false } }\n' + source[start:source.index('\n#endif', start)]
 fixture = Path('Tests/Apple/SetlistSearchTabTests.swift').read_text()
 Path(sys.argv[1]).write_text(fixture.replace('// INSERT_SEARCH_KEYS', keys))
 PY

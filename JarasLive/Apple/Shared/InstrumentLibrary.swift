@@ -8,6 +8,13 @@ enum InstrumentCategory: String, CaseIterable, Identifiable {
     case synth = "Synth", synthPad = "Synth Pad", lead = "Lead", acordeon = "Acordeon"
     case brass = "Brass", mallets = "Mallets", drum = "Drum"
     var id: String { rawValue }
+    var displayName: String {
+        switch self {
+        case .user: return "User-Sf2"
+        case .pianos: return "Grand Pianos"
+        default: return rawValue
+        }
+    }
     var folder: String {
         switch self {
         case .user: return "User"
@@ -29,7 +36,7 @@ enum InstrumentCategory: String, CaseIterable, Identifiable {
         }
     }
 }
-struct LibraryInstrument: Identifiable {
+struct LibraryInstrument: Identifiable, Equatable {
     let id: String
     let name: String
     let category: InstrumentCategory
@@ -385,10 +392,14 @@ struct LibraryInstrument: Identifiable {
                 }
             }
         }
-        imported = userBanks.values.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-        installed = Set(entries.filter { FileManager.default.fileExists(atPath: file($0.id).path) }.map(\.id))
-        downloaded = Set(entries.filter { resolvedFile($0.id, projectDirectory: projectDirectory) != nil }.map(\.id))
-        sources = Dictionary(uniqueKeysWithValues: Self.catalog.compactMap { instrument in instrument.url.map { (instrument.id, $0) } })
+        let userInstruments = userBanks.values.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        if imported != userInstruments { imported = userInstruments }
+        let local = Set(entries.filter { FileManager.default.fileExists(atPath: file($0.id).path) }.map(\.id))
+        if installed != local { installed = local }
+        let available = Set(entries.filter { resolvedFile($0.id, projectDirectory: projectDirectory) != nil }.map(\.id))
+        if downloaded != available { downloaded = available }
+        let catalogSources = Dictionary(uniqueKeysWithValues: Self.catalog.compactMap { instrument in instrument.url.map { (instrument.id, $0) } })
+        if sources != catalogSources { sources = catalogSources }
     }
 
     func importSoundFonts(_ files: [URL]) async {

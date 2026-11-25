@@ -1,6 +1,108 @@
 import XCTest
 @testable import JarasApplication
 final class ClickTempoTests: XCTestCase {
+    func testStackedStemsCycleAllVisibleItemsAndKeepTrackOverride() throws {
+        var track = Track(id: UUID(), name: "Stems", role: .other)
+        let first = AudioClip(id: UUID(), name: "First", startTime: 0, duration: 8)
+        let separate = AudioClip(id: UUID(), name: "Separate", startTime: 12, duration: 1)
+        let second = AudioClip(id: UUID(), name: "Second", startTime: 2, duration: 4)
+        let third = AudioClip(id: UUID(), name: "Third", startTime: 3, duration: 2)
+        track.clips = [first, separate, second, third]
+        track.stackedStems = true
+        XCTAssertEqual(TrackLanes(track: track).count, 1)
+        XCTAssertEqual(track.cycleOverlappingStems(at: 4), second.id)
+        XCTAssertEqual(track.cycleOverlappingStems(at: 4), first.id)
+        XCTAssertEqual(track.cycleOverlappingStems(at: 4), third.id)
+        XCTAssertNil(track.cycleOverlappingStems(at: 8))
+        XCTAssertEqual(track.clips[1].id, separate.id)
+        track.stackedStems = false
+        XCTAssertNil(track.cycleOverlappingStems(at: 4))
+        XCTAssertEqual(TrackLanes(track: track).count, 3)
+        let restored = try JSONDecoder().decode(Track.self, from: JSONEncoder().encode(track))
+        XCTAssertEqual(restored.stackedStems, false)
+    }
+
+    func testElasticPointMovesSourceAnchorAndRetainsTheItemBounds() throws {
+        let song = Project.empty(name: "Elastic").songs[0]
+        var clip = AudioClip(id: UUID(), name: "Audio", startTime: 2, duration: 10, sourceOffset: 3)
+        let original = clip
+        let progress = try XCTUnwrap(song.elasticSourceProgress(clip, at: 6))
+        clip.elasticPoints = [ElasticPoint(position: 0.4, source: progress)]
+        XCTAssertEqual(song.tempoAudioSegments(clip).map(\.audioRate), [1, 1])
+        clip.elasticPoints?[0].position = 0.6
+        let fragments = song.tempoAudioSegments(clip)
+        XCTAssertEqual(fragments.map(\.startTime), [2, 8])
+        XCTAssertEqual(fragments.map(\.sourceOffset), [3, 7])
+        XCTAssertEqual(fragments.map(\.duration), [6, 4])
+        XCTAssertEqual(fragments[0].audioRate, 4.0 / 6, accuracy: 1e-9)
+        XCTAssertEqual(fragments[1].audioRate, 6.0 / 4, accuracy: 1e-9)
+        XCTAssertTrue(fragments.allSatisfy { $0.elasticPoints == nil })
+        XCTAssertEqual(try JSONDecoder().decode(AudioClip.self, from: JSONEncoder().encode(clip)), clip)
+        XCTAssertEqual(song.tempoAudioSegments(original), [original])
+    }
+
+    func testElasticShiftRampPinsBothMarkersAndSplitsWithoutChangingTiming() throws {
+        let song = Project.empty(name: "Elastic").songs[0]
+        var clip = AudioClip(id: UUID(), name: "Audio", startTime: 4, duration: 8, sourceOffset: 3)
+        var points = [ElasticPoint(position: 0.25, source: 0.25), ElasticPoint(position: 0.625, source: 0.625)]
+        let ratio = points.adjustElasticRate(index: 0, right: true, down: 40, preservePositions: true,
+                                            reset: false, referenceRate: 1)
+        XCTAssertEqual(ratio, 1)
+        XCTAssertEqual(points.map { $0.position }, [0.25, 0.625])
+        XCTAssertEqual(points.speedForElasticSpan(1).start, 0.80, accuracy: 1e-9)
+        XCTAssertEqual(points.speedForElasticSpan(1).end, 1.20, accuracy: 1e-9)
+        clip.elasticPoints = points
+        let probe = 7.5
+        let progress = try XCTUnwrap(song.elasticSourceProgress(clip, at: probe))
+        XCTAssertEqual(progress * 8, 2 + 1.35, accuracy: 1e-9)
+        let positions = stride(from: 4.0, through: 12.0, by: 0.125)
+        let before = try positions.map { try XCTUnwrap(song.elasticSourceProgress(clip, at: $0)) }
+        points.insertElasticAnchor(ElasticPoint(position: (probe - clip.startTime) / clip.duration, source: progress))
+        clip.elasticPoints = points
+        let after = try positions.map { try XCTUnwrap(song.elasticSourceProgress(clip, at: $0)) }
+        for (a, b) in zip(before, after) { XCTAssertEqual(a, b, accuracy: 1e-9) }
+        let segments = song.tempoAudioSegments(clip)
+        for (a, b) in zip(segments, segments.dropFirst()) {
+            XCTAssertEqual(a.startTime + a.duration, b.startTime, accuracy: 1e-9)
+            XCTAssertEqual(a.sourceOffset + a.duration * a.audioRate, b.sourceOffset, accuracy: 1e-9)
+        }
+        XCTAssertEqual(try JSONDecoder().decode(AudioClip.self, from: JSONEncoder().encode(clip)), clip)
+    }
+
+    func testElasticRateDragRipplesAndResetRestoresTheOriginalAudioSpan() throws {
+        let song = Project.empty(name: "Elastic").songs[0]
+        for markerCount in [1, 2] {
+            for right in [false, true] {
+                var clip = AudioClip(id: UUID(), name: "Audio", startTime: 2, duration: 8, sourceOffset: 3)
+                let original = Array([ElasticPoint(position: 0.25, source: 0.25),
+                                      ElasticPoint(position: 0.625, source: 0.625)].prefix(markerCount))
+                clip.elasticPoints = original
+                var points = original
+                let ratio = points.adjustElasticRate(index: 0, right: right, down: -2, preservePositions: false,
+                                                     reset: false, referenceRate: 1)
+                XCTAssertLessThan(ratio, 1)
+                clip = try XCTUnwrap(song.applyingElasticEdit(to: clip, points: points,
+                                                              durationRatio: ratio, referenceRate: 1))
+                let span = right ? 1 : 0
+                let reference = song.elasticReferenceRate(clip)
+                let speed = points.speedForElasticSpan(span, referenceRate: reference)
+                XCTAssertEqual(right ? speed.start : speed.end, 1.01, accuracy: 1e-9)
+                XCTAssertEqual(right ? speed.end : speed.start, 1, accuracy: 1e-9)
+                if right { XCTAssertEqual(points[0].position * clip.duration, 2, accuracy: 1e-9) }
+                let segments = song.tempoAudioSegments(clip)
+                let last = try XCTUnwrap(segments.last)
+                XCTAssertEqual(last.sourceOffset + last.duration * last.audioRate, 11, accuracy: 1e-9)
+                XCTAssertEqual(last.startTime + last.duration, clip.startTime + clip.duration, accuracy: 1e-9)
+                let reset = points.adjustElasticRate(index: 0, right: right, down: 0, preservePositions: false,
+                                                     reset: true, referenceRate: reference)
+                XCTAssertEqual(ratio * reset, 1, accuracy: 1e-9)
+                for (restored, original) in zip(points, original) {
+                    XCTAssertEqual(restored.position, original.position, accuracy: 1e-9)
+                }
+            }
+        }
+    }
+
     func testShortVoiceBurstReturnsToEstablishedTempoWithoutExtraMarkers() {
         typealias S = ClickTempoDetector.Section
         let measured = [S(position: 0.0000833333, bpm: 161),

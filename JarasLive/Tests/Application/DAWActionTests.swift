@@ -369,7 +369,9 @@ final class DAWActionTests: XCTestCase {
     func testDefaultsAndRemappingRemoveOldAliases() {
         var bindings = DAWActionBindings()
         XCTAssertNil(bindings.binding(.tapTempo).keyboard)
-        XCTAssertNil(bindings.binding(.pause).keyboard)
+        XCTAssertEqual(bindings.matching(ControlInput(kind: "keyboard", label: "", key: 49, modifiers: 1 << 19)), .pause)
+        XCTAssertEqual(bindings.matching(ControlInput(kind: "keyboard", label: "", key: 49, modifiers: 1 << 17)), .subPlayStop)
+        XCTAssertFalse(DAWAction.pause.repeats)
         XCTAssertEqual(bindings.matching(ControlInput(kind: "keyboard", label: "", key: 1, modifiers: 0)), .splitItems)
         let cmdT = ControlInput(kind: "keyboard", label: "", key: 17, modifiers: 1 << 20)
         let ctrlT = ControlInput(kind: "keyboard", label: "", key: 17, modifiers: 1 << 18)

@@ -51,6 +51,21 @@ import Foundation
     window.orderFront(nil)
     scroll.contentView.scroll(to: .zero); scroll.reflectScrolledClipView(scroll.contentView)
     precondition(meter.visibleRect.height == 80, "meter fixture must intersect the native viewport")
+    let dotLevel = TrackMeterLevel()
+    let dot = NativeVerticalTrackMeterView(frame: NSRect(x: 50, y: 0, width: 10, height: 10))
+    let dotLayer = dot.layer!.sublayers!.last!
+    dot.presentation = .dot
+    dot.bind(dotLevel, showScale: false)
+    document.addSubview(dot)
+    dot.layoutSubtreeIfNeeded()
+    precondition(dotLayer.superlayer === dot.layer && !dotLayer.isHidden &&
+                 dotLayer.cornerRadius == 5 && dotLayer.backgroundColor != nil,
+                 "a compact track paints its signal dot as soon as it is mounted")
+    dotLayer.removeFromSuperlayer()
+    dot.refreshVisibleDrawing()
+    precondition(dotLayer.superlayer === dot.layer, "a detached signal layer must recover without scrolling")
+    dot.removeFromSuperview()
+    print("NATIVE_MINIMUM_HEIGHT_SIGNAL_DOT_DRAWS_WITHOUT_SCROLL_OK")
     func meterLayer(_ name: String) -> CALayer { meter.layer!.sublayers!.first { $0.name == name }! }
     let emptyPeakFrame = meterLayer("meter-peak").frame
     precondition(!meterLayer("meter-peak").isHidden && emptyPeakFrame.width > 0 && meterLayer("meter-peak").borderWidth == 0

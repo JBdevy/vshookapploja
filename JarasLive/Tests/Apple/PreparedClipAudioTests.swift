@@ -75,6 +75,61 @@ let directory = FileManager.default.temporaryDirectory.appendingPathComponent("p
 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 defer { try? FileManager.default.removeItem(at: directory) }
 
+// End two non-zero samples together at an edit boundary inside the render
+// block. An abrupt step to silence clicks even with all PCM already buffered.
+do {
+    let sampleRate = 48_000.0
+    let block: AVAudioFrameCount = 128
+    let endFrame = 913.0
+    let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2)!
+    let url = directory.appendingPathComponent("nonzero-item-end.wav")
+    let samples = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 2048)!
+    samples.frameLength = samples.frameCapacity
+    for frame in 0..<Int(samples.frameLength) {
+        samples.floatChannelData![0][frame] = 0.25
+        samples.floatChannelData![1][frame] = -0.25
+    }
+    do {
+        let file = try AVAudioFile(forWriting: url, settings: format.settings)
+        try file.write(from: samples)
+    }
+    for rate in [1.0, 1.25] {
+        let engine = AVAudioEngine()
+        let source = JarasPreparedClip(format: format)
+        engine.attach(source.node)
+        engine.connect(source.node, to: engine.mainMixerNode, format: format)
+        try engine.enableManualRenderingMode(.realtime, format: format, maximumFrameCount: block)
+        try engine.start()
+        try source.prepare(url, sourceFrame: 0, endFrame: endFrame, rate: rate, pitch: 12 * log2(rate),
+                           loopStart: 0, loopEnd: 0)
+        source.start(atHostTime: 0, ramp: false)
+        let output = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: block)!
+        let end = Int(ceil(endFrame / rate))
+        var recorded: [Float] = []
+        while recorded.count < end + Int(block) {
+            var status: OSStatus = 0
+            output.frameLength = block
+            require(engine.manualRenderingBlock(block, output.mutableAudioBufferList, &status) == .success && status == 0,
+                    "Item ending failed to render")
+            for frame in 0..<Int(block) {
+                let left = output.floatChannelData![0][frame]
+                require(abs(left + output.floatChannelData![1][frame]) < 0.000001,
+                        "Item ending shifted one stereo channel")
+                recorded.append(left)
+            }
+        }
+        require(recorded[..<(end - Int(sampleRate * 0.002))].allSatisfy { abs($0 - 0.25) < 0.000001 },
+                "The boundary changed PCM before the short de-click")
+        require(recorded[(end - 1)] > 0 && recorded[(end - 1)] < 0.003,
+                "Item ending produced an abrupt step into silence")
+        require(recorded[end...].allSatisfy { $0 == 0 }, "Item leaked past its exact end")
+        require(source.underruns == 0, "Item ending exhausted buffered PCM")
+        source.stop()
+        engine.stop()
+    }
+    print("PREPARED_CLIP_EXACT_END_WITHOUT_STEP_OK")
+}
+
 for sampleRate in [44100.0, 48000.0] {
     let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2)!
     let url = directory.appendingPathComponent("source-\(Int(sampleRate)).wav")

@@ -90,7 +90,8 @@ final class RemoteGrid extends View {
                 if(clipDuration<=0||visibleEnd<=visibleStart)continue;
                 int lane=lanes.get(RemoteModel.id(clip,"id"));float top=y+lane*laneH+dp(3);
                 RectF box=new RectF(x(visibleStart)+dp(1),top,x(visibleEnd)-dp(1),top+laneH-dp(6));if(box.width()<=0)continue;
-                items.draw(canvas,box,track,clip,(visibleStart-clipStart)/clipDuration,(visibleEnd-visibleStart)/clipDuration,!itemHeadersHidden);
+                items.draw(canvas,box,track,clip,(visibleStart-clipStart)/clipDuration,(visibleEnd-visibleStart)/clipDuration,
+                        !itemHeadersHidden,s.optBoolean("gridInvertsWaveforms",true));
                 hits.add(new Hit(box,itemHeadersHidden?new RectF():items.muteRect(box),clip));
             }
             canvas.restore();y+=row;

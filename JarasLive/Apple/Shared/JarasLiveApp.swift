@@ -207,13 +207,15 @@ struct RootView: View {
         .background(InterfaceScaleAnchor(preserveFrame: true))
         .background(TrialTitlebar(auth: auth))
         .background(ProjectWindowSizing(editor: canEnter && (documents.ready || documents.projectTabCount > 1),
-                                        login: desktopLoginVisible, documents: documents, chromeColor: interfaceTheme.titlebar))
+                                        login: desktopLoginVisible, documents: documents,
+                                        chromeColor: canEnter && documents.ready ? JarasTheme.proTransportTop : interfaceTheme.titlebar))
         .overlay {
             GeometryReader { geometry in
-                interfaceTheme.titlebar
+                let inWorkspace = canEnter && documents.ready
+                (inWorkspace ? JarasTheme.proTransportTop : interfaceTheme.titlebar)
                     .frame(height: geometry.safeAreaInsets.top)
                     .overlay(alignment: .bottom) {
-                        Rectangle().fill(JarasTheme.line.opacity(0.65)).frame(height: 1)
+                        if !inWorkspace { Rectangle().fill(JarasTheme.line.opacity(0.65)).frame(height: 1) }
                     }
                     .frame(maxHeight: .infinity, alignment: .top)
                     .ignoresSafeArea(edges: .top)
@@ -341,7 +343,7 @@ struct RootView: View {
                          showProjects: showProjects)
             .environment(\.locale,locale).environment(\.colorScheme,.dark)
             .environment(\.gridInteractionBlocked, browserVisible)
-            .environment(\.controlActiveState, .active)
+            .workspaceControlsAppearActive()
             .environment(\.displayScale,displayScale).font(.jarasBody))
     }
     final class Deck: NSView {
@@ -670,6 +672,14 @@ private struct ClosingLogoView: View {
 /// Save confirmation shared visually with Windows, with an explicit app logo.
 /// AppKit can omit the app icon from NSAlert sheets, so own this small surface.
 @MainActor final class ProjectSaveAlert: NSObject {
+    static let appIcon: NSImage? = {
+        if let url = Bundle.main.url(forResource: "CatLiveIcon", withExtension: "icns"),
+           let image = NSImage(contentsOf: url) {
+            return image
+        }
+        return NSImage(named: "CatLiveLogo")
+    }()
+
     private final class Panel: NSPanel {
         override var canBecomeKey: Bool { true }
     }
@@ -726,7 +736,8 @@ private struct ClosingLogoView: View {
         content.layer?.cornerRadius = 25; content.layer?.masksToBounds = true
         content.layer?.borderWidth = 1; content.layer?.borderColor = NSColor.white.withAlphaComponent(0.22).cgColor
         let logo = NSImageView(frame: NSRect(x: (content.bounds.width-64)/2, y: 24, width: 64, height: 64))
-        logo.image = NSApp.applicationIconImage; logo.imageScaling = .scaleProportionallyUpOrDown
+        logo.image = Self.appIcon ?? NSApp.applicationIconImage
+        logo.imageScaling = .scaleProportionallyUpOrDown
         logo.setAccessibilityLabel("CatLive")
         content.addSubview(logo)
         let title = NSTextField(wrappingLabelWithString: messageText)

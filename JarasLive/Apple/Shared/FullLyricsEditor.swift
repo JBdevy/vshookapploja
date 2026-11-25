@@ -73,6 +73,7 @@ struct NativeFullLyricsInput: UIViewRepresentable {
     @Binding var text: String
     var outlineStanzas = true
     var font: UIFont = .systemFont(ofSize: 15)
+    var startsEditingOnAppear = false
 
     private var defaultAttributes: [NSAttributedString.Key: Any] {
         [.font: font, .foregroundColor: UIColor(JarasTheme.text)]
@@ -81,6 +82,7 @@ struct NativeFullLyricsInput: UIViewRepresentable {
     func makeUIView(context: Context) -> UITextView {
         let view = StanzaTextView(usingTextLayoutManager: false)
         view.outlineStanzas = outlineStanzas
+        view.focusOnAttach = startsEditingOnAppear
         view.backgroundColor = UIColor(JarasTheme.background)
         view.textContainerInset = UIEdgeInsets(top: 9, left: 10, bottom: 9, right: 10)
         for run in ItemTextColors.runs(text) {
@@ -97,6 +99,10 @@ struct NativeFullLyricsInput: UIViewRepresentable {
     }
     func updateUIView(_ view: UITextView, context: Context) { context.coordinator.parent = self }
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+    static func dismantleUIView(_ view: UITextView, coordinator: Coordinator) {
+        if view.isFirstResponder { view.resignFirstResponder() }
+        view.delegate = nil
+    }
 
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: NativeFullLyricsInput
@@ -132,6 +138,18 @@ struct NativeFullLyricsInput: UIViewRepresentable {
     }
 }
 private final class StanzaTextView: UITextView {
+    var focusOnAttach = false
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard window != nil, focusOnAttach else { return }
+        focusOnAttach = false
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.window != nil else { return }
+            self.becomeFirstResponder()
+            self.selectedRange = NSRange(location: (self.text as NSString?)?.length ?? 0, length: 0)
+        }
+    }
+
     var outlineStanzas = true
     static let colorKey = NSAttributedString.Key("CatLiveItemColor")
     override func draw(_ rect: CGRect) {

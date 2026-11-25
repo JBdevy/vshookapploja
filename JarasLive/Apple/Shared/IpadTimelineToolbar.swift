@@ -6,33 +6,17 @@ import SwiftUI
 struct IpadTimelineToolbar: View {
     let show: ShowController
     let addTrack: () -> Void
-    let showsTimelineSwitches: Bool
     @Binding private var editing: Bool
-    @Binding private var showRegions: Bool
-    @Binding private var showTempo: Bool
     @ObservedObject private var updates: ShowProjectPresentation
-    @AppStorage(TimelineSnapPreference.key) private var snapEnabled = true
     @State private var showingVisibility = false
     @State private var showingLocks = false
-    @State private var pendingTimebase: TimebaseRequest?
 
-    private struct TimebaseRequest {
-        let project: UUID
-        let song: UUID
-        let relative: Bool
-    }
-
-    init(show: ShowController, addTrack: @escaping () -> Void, editing: Binding<Bool>,
-         showRegions: Binding<Bool>, showTempo: Binding<Bool>, showsTimelineSwitches: Bool) {
+    init(show: ShowController, addTrack: @escaping () -> Void, editing: Binding<Bool>) {
         self.show = show
         self.addTrack = addTrack
-        self.showsTimelineSwitches = showsTimelineSwitches
         _editing = editing
-        _showRegions = showRegions; _showTempo = showTempo
         _updates = ObservedObject(wrappedValue: show.projectPresentation)
     }
-
-    private var relativeTimebase: Bool { show.current?.projectTime.timebase == .relative }
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
@@ -42,30 +26,8 @@ struct IpadTimelineToolbar: View {
         .padding(.horizontal, 4)
         .font(.jarasSystem(size: 11, weight: .semibold))
         .foregroundStyle(JarasTheme.text)
-        .sheet(isPresented: $showingVisibility) {
-            TrackVisibilityEditor(show: show, close: { showingVisibility = false })
-        }
-        .alert(Text(verbatim: JarasLocalization.string(pendingTimebase?.relative == true ? "Enable relative timebase?" : "Disable relative timebase?")),
-               isPresented: Binding(get: { pendingTimebase != nil }, set: { if !$0 { pendingTimebase = nil } }),
-               presenting: pendingTimebase) { request in
-            Button("Cancel", role: .cancel) { }
-            Button(request.relative ? "Enable" : "Disable") {
-                guard request.project == show.snapshot.project.id,
-                      let song = show.current, song.id == request.song else { return }
-                var settings = song.projectTime
-                settings.timebase = request.relative ? .relative : .free
-                if show.configureProjectTime(bpm: song.bpm, beats: song.meterBeats, unit: song.meterUnit, settings: settings) {
-                    GlobalProjectTiming(bpm: song.bpm, beats: song.meterBeats, unit: song.meterUnit, settings: settings).save()
-                }
-            }
-        } message: { request in
-            Text(LocalizedStringKey(request.relative
-                ? "Relative timebase: changing the project BPM adjusts item duration and playback speed to follow the tempo. With Free timebase, changing the project BPM preserves item duration and playback speed. Tempo markers with their own timebase keep their individual settings."
-                : "Free timebase: changing the project BPM changes the grid without stretching or shortening items. Item duration and playback speed are preserved. Tempo markers with their own timebase keep their individual settings."))
-        }
         .onChange(of: show.snapshot.project.id) { _ in
             showingVisibility = false
-            pendingTimebase = nil
         }
     }
 
@@ -76,17 +38,6 @@ struct IpadTimelineToolbar: View {
             editButton
             timelineButtons
             addButton
-            Menu {
-                Toggle(isOn: $showRegions) { Text(verbatim: "Region") }
-                Toggle(isOn: $showTempo) { Text(verbatim: "Tempo") }
-            } label: {
-                ControlIcon(name: "timelineLanes", active: showRegions || showTempo)
-                    .frame(width: 21, height: 17).frame(width: addControlWidth, height: 32).contentShape(Rectangle())
-            }.menuIndicator(.hidden)
-                .frame(width: addControlWidth, height: 32)
-                .background(JarasTheme.text.opacity(0.07), in: RoundedRectangle(cornerRadius: 4))
-                .accessibilityLabel("Timeline lanes")
-                .accessibilityIdentifier("timeline-lanes").help(Text(verbatim: "Hide/View - Region/Markers"))
         }
     }
 
@@ -101,40 +52,29 @@ struct IpadTimelineToolbar: View {
 
     private var addButton: some View {
         Button(action: addTrack) {
-            ControlIcon(name: "addTrack", size: 14).frame(width: addControlWidth, height: 32).contentShape(Rectangle())
+            Text(verbatim: "Add").frame(width: addControlWidth, height: 32).contentShape(Rectangle())
         }.buttonStyle(IpadTimelineToolbarButtonStyle(color: JarasTheme.accent))
             .accessibilityLabel("Add Track")
             .accessibilityIdentifier("native-add-track")
     }
 
     @ViewBuilder private var timelineButtons: some View {
-        if showsTimelineSwitches {
-            Button { snapEnabled.toggle() } label: {
-                TransportControlIcon(name: "magnet")
-                    .frame(width: 32, height: 32).contentShape(Rectangle())
-            }.buttonStyle(IpadTimelineToolbarButtonStyle(color: snapEnabled ? JarasTheme.green : JarasTheme.yellow))
-                .accessibilityLabel("Timeline snapping")
-                .accessibilityIdentifier("timeline-snap")
-                .accessibilityValue(snapEnabled ? "On" : "Off")
-        }
+        TrackMixerVUButton(size: 32)
+        TrackMixerComponentsPresetButton(size: 32)
         Button { showingVisibility = true } label: {
             ControlIcon(name: "eye", active: showingVisibility).frame(width: 32, height: 32).contentShape(Rectangle())
         }.buttonStyle(IpadTimelineToolbarButtonStyle(color: JarasTheme.text))
             .accessibilityLabel("Visibilidade das pistas")
             .accessibilityIdentifier("native-track-visibility").help(Text(verbatim: "Hide/View-Tracks"))
-        if showsTimelineSwitches {
-            Button {
-                guard show.canControl(), let song = show.current else { return }
-                pendingTimebase = TimebaseRequest(project: show.snapshot.project.id, song: song.id,
-                                                  relative: song.projectTime.timebase != .relative)
-            } label: {
-                TransportControlIcon(name: "itemTimebase").frame(width: 32, height: 32).contentShape(Rectangle())
-            }.buttonStyle(IpadTimelineToolbarButtonStyle(color: relativeTimebase ? JarasTheme.green : JarasTheme.yellow))
-                .accessibilityLabel("Relative timebase")
-                .accessibilityIdentifier("timeline-timebase")
-                .accessibilityValue(relativeTimebase ? "Enabled" : "Disabled")
-                .disabled(show.current == nil)
-        }
+            .popover(isPresented: $showingVisibility, attachmentAnchor: .rect(.bounds), arrowEdge: .top) {
+                let editor = TrackVisibilityEditor(show: show, close: { showingVisibility = false })
+                    .preferredColorScheme(.dark)
+                if #available(iOS 16.4, *) {
+                    editor.presentationCompactAdaptation(.popover).presentationBackground(JarasTheme.panel)
+                } else {
+                    editor
+                }
+            }
         Button { show.setTimelineMovementLocked(!show.timelineMovementLocked) } label: {
             ControlIcon(name: show.timelineMovementLocked ? "lock" : "unlock", active: show.timelineMovementLocked)
                 .frame(width: 32, height: 32).contentShape(Rectangle())

@@ -3,11 +3,11 @@ import SwiftUI
 
 struct MacProjectionRail: View {
     let show: ShowController
-    @ObservedObject private var notices = TPNoticeController.shared
+    @ObservedObject private var presentation = TPNoticeController.shared.editorPresentation
     var body: some View {
         HStack(spacing: 6) {
-            Button { notices.open() } label: {
-                DesktopToolbarLabel(title: "Messages", systemImage: "text.bubble", active: notices.editorOpen)
+            Button { TPNoticeController.shared.open() } label: {
+                DesktopToolbarLabel(title: "Messages", systemImage: "text.bubble", active: presentation.isOpen)
             }.accessibilityLabel("Messages").help(Text("Messages"))
 
         }.buttonStyle(.plain)
