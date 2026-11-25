@@ -2757,7 +2757,7 @@ final class ProjectWindowAnchor: NSView {
         window.toggleFullScreen(nil)
     }
     static let editorFrameSize = NSSize(width: 1440, height: 791)
-    static let editorMinimumFrameSize = NSSize(width: 1339, height: 757)
+    static let editorMinimumFrameSize = NSSize(width: 1263, height: 757)
     static func configureChrome(of window: NSWindow) {
         // The interface already stays below the native titlebar. Extending its
         // host underneath it makes AppKit walk every control's drag-prevention

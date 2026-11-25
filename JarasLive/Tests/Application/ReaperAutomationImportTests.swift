@@ -261,7 +261,9 @@ final class ReaperAutomationImportTests: XCTestCase {
         XCTAssertEqual(clips[1].midi?.notes.count, 1)
         XCTAssertEqual(clips[1].sourceOffset, 0)
         XCTAssertEqual(clips[1].audioRate, 1)
-        XCTAssertEqual(TrackLanes(track: track).count, 2)
+        var separated = track
+        separated.stackedStems = false
+        XCTAssertEqual(TrackLanes(track: separated).count, 2)
         XCTAssertEqual(clips.compactMap { $0.fx?.externalPlugins?.first?.componentState }, [payload, payload])
         XCTAssertNotEqual(clips[0].fx?.externalPlugins?.first?.id, clips[1].fx?.externalPlugins?.first?.id)
         let envelope = try XCTUnwrap(clips[0].automation?.envelopes.first { $0.target.kind == .volume })
@@ -369,7 +371,9 @@ final class ReaperAutomationImportTests: XCTestCase {
         let result = try ReaperProjectImporter.read(file)
         let track = result.project.songs[0].tracks[0]
         XCTAssertEqual(track.clips.count, 2)
-        XCTAssertEqual(TrackLanes(track: track).count, 2)
+        var separated = track
+        separated.stackedStems = false
+        XCTAssertEqual(TrackLanes(track: separated).count, 2)
         XCTAssertNotNil(track.clips[0].midi)
         XCTAssertGreaterThan(track.clips[0].midi?.notes.count ?? 0, 5)
         XCTAssertNotNil(track.clips[1].audioFile)

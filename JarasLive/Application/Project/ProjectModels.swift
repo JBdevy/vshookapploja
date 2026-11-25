@@ -1274,7 +1274,9 @@ public enum StemLayoutPreferences {
 }
 
 public extension Track {
-    var usesStackedStems: Bool { stackedStems ?? StemLayoutPreferences.stacksByDefault }
+    var usesStackedStems: Bool {
+        stackedStems ?? (!kind.isTeleprompter && StemLayoutPreferences.stacksByDefault)
+    }
 
     /// Rotate only the occupied slots. Three overlapping clips must all be reachable.
     mutating func cycleOverlappingStems(at time: Double) -> UUID? {

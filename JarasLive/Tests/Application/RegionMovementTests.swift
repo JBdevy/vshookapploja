@@ -91,6 +91,7 @@ final class RegionMovementTests: XCTestCase {
         let b = Part(id: UUID(), name: "B", startTime: 20, endTime: 30)
         song.parts = [a, b]; song.duration = 30; song.regionOwnershipInitialized = true
         var track = Track(id: UUID(), name: "Audio", role: .other)
+        track.stackedStems = false
         track.clips = [AudioClip(id: UUID(), name: "A", startTime: 2, duration: 5, regionOwnerID: a.id),
                        AudioClip(id: UUID(), name: "B", startTime: 22, duration: 5, regionOwnerID: b.id)]
         song.tracks = [track]

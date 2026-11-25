@@ -132,6 +132,7 @@ final class ProjectEditingTests: XCTestCase {
     func testRecordingLanesOnlyExpandForOverlaps() {
         var track = Track(id: UUID(), name: "Input", role: .other)
         let original = AudioClip(id: UUID(), name: "Original", startTime: 10, duration: 5)
+        track.stackedStems = false
         track.clips = [original]
         var layout = TrackLanes(track: track)
         XCTAssertEqual(layout.recordingLane(start: 0, duration: 5, clips: track.clips), 0)
@@ -352,6 +353,7 @@ final class ProjectEditingTests: XCTestCase {
         XCTAssertEqual(clips[1].sourceOffset, 10)
         XCTAssertEqual(clips[0].audioFile, clips[1].audioFile)
         XCTAssertEqual(clips[0].waveform + clips[1].waveform, clip.waveform)
+        project.songs[0].tracks[0].stackedStems = false
         for lane in 1...20 { var take = clip; take.id = UUID(); take.recordingLane = lane; project.songs[0].tracks[0].clips.append(take) }
         XCTAssertEqual(TrackLanes(track: project.songs[0].tracks[0]).count, 21)
         try project.validate()

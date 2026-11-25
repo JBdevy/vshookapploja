@@ -567,17 +567,20 @@ final class IncrementalTrackSettingsTests: XCTestCase {
         let (controller, executor) = try show(fixture())
         var changes = 0
         let subscription = controller.projectPresentation.objectWillChange.sink { changes += 1 }
-        defer { subscription.cancel() }
+        var selectionChanges = 0
+        let selectionSubscription = controller.trackSelectionPresentation.objectWillChange.sink { selectionChanges += 1 }
+        defer { subscription.cancel(); selectionSubscription.cancel() }
         executor.transport.position += 1
         for _ in 0..<30 { controller.tick() }
         XCTAssertEqual(changes, 0, "Playback position must not rebuild mixer controls")
         let track = try XCTUnwrap(controller.current?.tracks.last?.id)
         controller.setMixerTrackSelection([track], anchor: track)
-        XCTAssertEqual(changes, 1)
+        XCTAssertEqual(selectionChanges, 1)
         controller.setMixerTrackSelection([track], anchor: track)
-        XCTAssertEqual(changes, 1, "Unchanged selection must not invalidate mixer")
+        XCTAssertEqual(selectionChanges, 1, "Unchanged selection must not invalidate mixer")
+        XCTAssertEqual(changes, 0, "Selection must not republish general project changes")
         controller.sendMixerControl(.volume, target: track, value: 0.5)
-        XCTAssertGreaterThan(changes, 1)
+        XCTAssertGreaterThan(changes, 0)
         let afterVolume = changes
         controller.sendMixerControl(.mute, target: track)
         XCTAssertGreaterThan(changes, afterVolume)

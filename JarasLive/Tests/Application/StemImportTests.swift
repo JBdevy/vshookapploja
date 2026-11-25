@@ -722,10 +722,12 @@ final class StemImportTests: XCTestCase {
             XCTAssertEqual(track.clips.map(\.startTime), [30, 30])
             XCTAssertEqual(track.clips.map(\.name), ["One", "Two"])
             XCTAssertTrue(track.clips.allSatisfy { $0.waveform.isEmpty })
-            let lanes = TrackLanes(track: track)
+            var separated = track
+            separated.stackedStems = false
+            let lanes = TrackLanes(track: separated)
             XCTAssertEqual(lanes.count, 2)
             XCTAssertNotEqual(lanes.lanes[track.clips[0].id], lanes.lanes[track.clips[1].id])
-            let restored = try JSONDecoder().decode(Track.self, from: JSONEncoder().encode(track))
+            let restored = try JSONDecoder().decode(Track.self, from: JSONEncoder().encode(separated))
             XCTAssertEqual(TrackLanes(track: restored), lanes)
             XCTAssertEqual(restored.clips.map(\.startTime), [30, 30])
         }

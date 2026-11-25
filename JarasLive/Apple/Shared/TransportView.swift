@@ -625,10 +625,13 @@ private struct DesktopTransportLayout {
             + TransportControlMetrics.desktopTunerWidth + 4 * gap + 1
         let available = width - 16 - proActions
         let controls = ProTransportButtons.controlCount
-        let minimumPlayback = controls * 32 + ProTransportButtons.splitHorizontalInset
-        compact = available < minimumPlayback + detailsWidth + 4 * gap
-        let playbackWidth = available - (compact ? gap : detailsWidth + 5 * gap)
-        buttonWidth = min(compact ? 66 : 96, max(32, (playbackWidth - ProTransportButtons.splitHorizontalInset) / controls))
+        let minimumButtonWidth: CGFloat = 30
+        let minimumPlayback = controls * minimumButtonWidth + ProTransportButtons.splitHorizontalInset
+        let inlineSpace = detailsWidth + 5 * gap + 1
+        compact = available - inlineSpace < minimumPlayback
+        let playbackWidth = available - (compact ? gap : inlineSpace)
+        buttonWidth = min(compact ? 66 : 96, max(minimumButtonWidth,
+            (playbackWidth - ProTransportButtons.splitHorizontalInset) / controls))
     }
 }
 

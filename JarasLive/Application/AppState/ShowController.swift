@@ -4932,7 +4932,10 @@ public final class ShowTrackSelectionPresentation: ObservableObject {
     }
     public func regionsFromSelection(_ ids: Set<UUID>) {
         guard canControl(), !finishing, let track = current?.tracks.first(where: { $0.kind != .timecode && $0.clips.contains { ids.contains($0.id) } }) else { return }
-        let lanes = TrackLanes(track: track).lanes
+        // Region creation uses the first separate lane in both display modes.
+        var separated = track
+        separated.stackedStems = false
+        let lanes = TrackLanes(track: separated).lanes
         let topLane = track.clips.filter { ids.contains($0.id) }.compactMap { lanes[$0.id] }.min() ?? 0
         let clips = track.clips.filter { ids.contains($0.id) && lanes[$0.id] == topLane }.sorted { $0.startTime < $1.startTime }
         var starts = current?.parts.map(\.startTime) ?? []
