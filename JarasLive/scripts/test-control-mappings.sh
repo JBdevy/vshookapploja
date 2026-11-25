@@ -12,7 +12,10 @@ source = source.replace('private weak var show:', 'weak var show:').replace('pri
 # The command-line host has no foreground application registration. Replace only
 # its active-app gate; test the production key handler and repeat dispatch below.
 source = source.replace('guard NSApp.isActive, transferRequest == nil', 'guard mappingTestApplicationActive, transferRequest == nil')
-Path(sys.argv[1]).write_text(source)
+meter = Path('Apple/Shared/ResourceUsageView.swift').read_text()
+start = meter.index('@MainActor final class TransportMIDIActivity:')
+end = meter.index('struct TransportResourceMeters: View', start)
+Path(sys.argv[1]).write_text(source + '\n' + meter[start:end])
 # ZIP package I/O is covered by VinhetasPackageTests; this fixture needs only MIDI library types.
 Path(sys.argv[3]).write_text(Path('Application/Project/Vinhetas.swift').read_text().split('public enum VinhetasPackage {')[0])
 vinhetas = Path('Apple/Shared/VinhetasPanel.swift').read_text()
