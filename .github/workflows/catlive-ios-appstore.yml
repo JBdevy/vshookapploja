@@ -41,7 +41,22 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  remote-item-volume:
+    # Run the UIKit fixture on a stable simulator. The Xcode 27 runner
+    # stalled in simctl install before the fixture could launch.
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+          persist-credentials: false
+
+      - name: Testar o editor de volume dos itens no Remote
+        run: bash JarasLive/scripts/test-remote-item-volume.sh
+
   ios-ipa:
+    needs: remote-item-volume
     runs-on: xcode-27
     timeout-minutes: 120
     env:
@@ -104,7 +119,6 @@ jobs:
           bash JarasLive/scripts/test-ipad-setlist-blocks.sh
           bash JarasLive/scripts/test-empty-track-mixer-selection.sh
           bash JarasLive/scripts/test-daw-remote.sh
-          bash JarasLive/scripts/test-remote-item-volume.sh
 
       - name: Verificar alterações no motor de áudio
         id: audio-changes
