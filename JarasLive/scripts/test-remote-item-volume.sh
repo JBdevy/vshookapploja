@@ -4,11 +4,13 @@ cd "$(dirname "$0")/.."
 python3 - "${1:-}" <<'PY'
 import json, os, pathlib, plistlib, shutil, subprocess, sys, tempfile, time
 def command(*args): return subprocess.check_output(args, text=True).strip()
-devices = [d for group in json.loads(command('xcrun','simctl','list','devices','available','-j'))['devices'].values() for d in group]
+groups = json.loads(command('xcrun','simctl','list','devices','available','-j'))['devices']
+devices = [dict(d, runtime=runtime) for runtime, group in groups.items() for d in group]
 device = next((d for d in devices if d['udid'] == sys.argv[1]), None) if sys.argv[1] else next((d for d in devices if d['state'] == 'Booted'), None)
 if device is None: device = next((d for d in devices if 'iPad' in d['name']), None)
 if device is None: raise SystemExit('An iOS simulator is required.')
 udid = device['udid']; booted_here = device['state'] != 'Booted'
+isolated = os.environ.get('CI') == 'true' and not sys.argv[1]
 bundle = 'com.catlive.tests.remoteitemvolume'
 folder = pathlib.Path(tempfile.mkdtemp(prefix='catlive-remote-item-volume-'))
 installed = False
@@ -29,6 +31,11 @@ try:
     # install. Retry the launch setup, while retaining every fixture assertion.
     for attempt in range(3):
         try:
+            if isolated:
+                udid = subprocess.check_output(
+                    ['xcrun','simctl','create','CatLive Volume Test',device['deviceTypeIdentifier'],device['runtime']],
+                    text=True, timeout=45).strip()
+                booted_here = True
             subprocess.run(['xcrun','simctl','bootstatus',udid,'-b'], check=True, timeout=150)
             subprocess.run(['xcrun','simctl','install',udid,str(app)], check=True, timeout=150)
             installed = True
@@ -42,13 +49,30 @@ try:
             if attempt == 2:
                 raise
             print(f'Retrying simulator setup after {error}', flush=True)
+            if isolated and udid != device['udid']:
+                try:
+                    subprocess.run(['xcrun','simctl','delete',udid], timeout=30,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except subprocess.TimeoutExpired:
+                    pass
+                udid, installed = device['udid'], False
     deadline = time.monotonic()+45
     while not result.exists() and time.monotonic()<deadline: time.sleep(.2)
     if not result.exists(): raise SystemExit('Remote item volume fixture timed out.')
     output=result.read_text(); print(output)
     if not output.startswith('REMOTE_ITEM_VOLUME_'): raise SystemExit(1)
 finally:
-    if installed: subprocess.run(['xcrun','simctl','uninstall',udid,bundle], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    if booted_here: subprocess.run(['xcrun','simctl','shutdown',udid], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    cleanup = []
+    if isolated and udid != device['udid']:
+        cleanup.append(['delete',udid])
+    elif not isolated:
+        if installed: cleanup.append(['uninstall',udid,bundle])
+        if booted_here: cleanup.append(['shutdown',udid])
+    for args in cleanup:
+        try:
+            subprocess.run(['xcrun','simctl',*args], timeout=30,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except subprocess.TimeoutExpired:
+            pass
     shutil.rmtree(folder)
 PY

@@ -573,7 +573,6 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         long now=SystemClock.elapsedRealtime();boolean active=fadeout.active(now);
         if(fadeoutControl!=null){
             fadeoutControl.setEnabled(fadeout.supported&&(active||state.optBoolean("playing")));
-            fadeoutControl.transportIcon("fadeout","Fadeout","Fadeout");
             fadeoutControl.setAlpha(1);
         }
         boolean visible=remote.mode.equals("director")&&active&&!fadeout.run.isEmpty()&&fadeout.value(now)>0;
@@ -711,6 +710,12 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         play.transportIcon("play","Play","Play");
         fadeoutControl=new Button(this,"Fadeout",this::toggleFadeout);
         fadeoutControl.transportStyle(0xffffff00,Color.BLACK);
+        if (tablet) {
+            fadeoutControl.transportIcon("fadeout","Fadeout","Fadeout");
+        } else {
+            fadeoutControl.setCompoundDrawablesWithIntrinsicBounds(0,R.drawable.transport_fadeout,0,0);
+            fadeoutControl.setCompoundDrawablePadding(dp(1));
+        }
         pause=new Button(this,"",()->remote.action(state.optBoolean("paused")?"play":"pause"));
         pause.transportIcon("pause",RemoteText.ui("Pause"),"");
         pause.transportStyle(0xff454545,Color.WHITE);
@@ -720,7 +725,8 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         for(Button button:new Button[]{play,fadeoutControl,pause,repeat}){
             button.setTextSize(tablet?11:9);
             if(button==fadeoutControl||(tablet&&button==play))button.setSingleLine(true);
-            button.setPadding(dp(2),0,dp(2),0);
+            if (!tablet && button == fadeoutControl) button.setPadding(dp(2),dp(9),dp(2),dp(5));
+            else button.setPadding(dp(2),0,dp(2),0);
             if(button==fadeoutControl)button.setAutoSizeTextTypeUniformWithConfiguration(7,11,1,android.util.TypedValue.COMPLEX_UNIT_SP);
             LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,dp(tablet?28:44),1);
             if(!tablet&&button!=play)lp.leftMargin=dp(4);
