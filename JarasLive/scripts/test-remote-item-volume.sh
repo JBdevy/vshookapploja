@@ -25,13 +25,23 @@ try:
     subprocess.run(['swiftc','-swift-version','5','-target',os.uname().machine+'-apple-ios16.0-simulator',
         '-sdk',command('xcrun','--sdk','iphonesimulator','--show-sdk-path'),'-parse-as-library',
         str(folder/'Fixture.swift'),'-o',str(app/'VolumeProbe')], check=True)
-    if booted_here:
-        subprocess.run(['xcrun','simctl','boot',udid], check=True)
-        subprocess.run(['xcrun','simctl','bootstatus',udid,'-b'], check=True)
-    subprocess.run(['xcrun','simctl','install',udid,str(app)], check=True); installed = True
-    container = pathlib.Path(command('xcrun','simctl','get_app_container',udid,bundle,'data'))
-    result = container/'Documents/result.txt'; result.unlink(missing_ok=True)
-    subprocess.run(['xcrun','simctl','launch',udid,bundle], check=True)
+    # A hosted runner can lose its CoreSimulator device between boot and
+    # install. Retry the launch setup, while retaining every fixture assertion.
+    for attempt in range(3):
+        try:
+            subprocess.run(['xcrun','simctl','bootstatus',udid,'-b'], check=True, timeout=150)
+            subprocess.run(['xcrun','simctl','install',udid,str(app)], check=True, timeout=150)
+            installed = True
+            container = pathlib.Path(subprocess.check_output(
+                ['xcrun','simctl','get_app_container',udid,bundle,'data'], text=True, timeout=90).strip())
+            result = container/'Documents/result.txt'
+            result.unlink(missing_ok=True)
+            subprocess.run(['xcrun','simctl','launch',udid,bundle], check=True, timeout=90)
+            break
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            if attempt == 2:
+                raise
+            print(f'Retrying simulator setup after {error}', flush=True)
     deadline = time.monotonic()+45
     while not result.exists() and time.monotonic()<deadline: time.sleep(.2)
     if not result.exists(): raise SystemExit('Remote item volume fixture timed out.')
