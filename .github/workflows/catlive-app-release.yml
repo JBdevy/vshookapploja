@@ -12,6 +12,14 @@ on:
         description: 'Número da build'
         required: true
         default: '1242'
+      upload_to_store:
+        description: 'Enviar o IPA ao App Store Connect'
+        type: boolean
+        default: true
+      existing_ios_run:
+        description: 'ID de uma execução bem-sucedida para enviar seu IPA já compilado'
+        type: string
+        default: ''
   push:
     tags: ['catlive-app-v*-build*']
 permissions:
@@ -56,9 +64,10 @@ jobs:
           PY
   ios:
     needs: prepare
+    if: inputs.existing_ios_run == ''
     uses: ./.github/workflows/catlive-ios-appstore.yml
     with:
-      upload_to_store: ${{ github.event_name == 'push' }}
+      upload_to_store: ${{ github.event_name == 'push' || inputs.upload_to_store }}
       version: ${{ needs.prepare.outputs.version }}
       build_number: ${{ needs.prepare.outputs.build_number }}
       source_ref: ${{ needs.prepare.outputs.source_ref }}
@@ -72,6 +81,7 @@ jobs:
       APP_STORE_CONNECT_API_KEY_P8_BASE64: ${{ secrets.CATLIVE_APP_STORE_CONNECT_API_KEY_P8_BASE64 }}
   android:
     needs: prepare
+    if: inputs.existing_ios_run == ''
     uses: ./.github/workflows/catlive-android-release.yml
     with:
       version: ${{ needs.prepare.outputs.version }}
@@ -82,6 +92,60 @@ jobs:
       KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
       KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
       KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+  upload-existing-ios:
+    if: github.event_name == 'workflow_dispatch' && inputs.existing_ios_run != ''
+    needs: prepare
+    runs-on: xcode-27
+    timeout-minutes: 30
+    permissions:
+      actions: read
+    steps:
+      - name: Conferir a execução de origem
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: ${{ inputs.existing_ios_run }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_RUN" =~ ^[0-9]+$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN" |
+            jq -e '.conclusion == "success" and .path == ".github/workflows/catlive-app-release.yml"'
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.existing_ios_run }}
+          name: CatLive-iOS-${{ needs.prepare.outputs.version }}
+          path: ${{ runner.temp }}/catlive-ipa
+      - name: Validar e enviar o IPA existente ao App Store Connect
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          BUILD_NUMBER: ${{ needs.prepare.outputs.build_number }}
+          ASC_KEY_ID: ${{ secrets.CATLIVE_APP_STORE_CONNECT_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.CATLIVE_APP_STORE_CONNECT_ISSUER_ID }}
+          ASC_API_KEY_P8_BASE64: ${{ secrets.CATLIVE_APP_STORE_CONNECT_API_KEY_P8_BASE64 }}
+        run: |
+          python3 - <<'PY'
+          import base64, os, pathlib, plistlib, re, subprocess, tempfile, zipfile
+
+          ipa, = pathlib.Path(os.environ['RUNNER_TEMP'], 'catlive-ipa').glob('*.ipa')
+          with zipfile.ZipFile(ipa) as archive:
+              info = plistlib.loads(archive.read('Payload/CatLive.app/Info.plist'))
+          assert info['CFBundleIdentifier'] == 'com.hookdeveloper.jaraslive'
+          assert info['CFBundleShortVersionString'] == os.environ['VERSION']
+          assert info['CFBundleVersion'] == os.environ['BUILD_NUMBER']
+          key_id = os.environ['ASC_KEY_ID']
+          assert re.fullmatch(r'[A-Z0-9]+', key_id)
+          issuer = os.environ['ASC_ISSUER_ID']
+          assert issuer
+          arguments = ['--file', str(ipa), '--type', 'ios', '--apiKey', key_id, '--apiIssuer', issuer]
+          with tempfile.TemporaryDirectory(prefix='catlive-asc-') as directory:
+              keys = pathlib.Path(directory, 'private_keys')
+              keys.mkdir(mode=0o700)
+              key = keys / f'AuthKey_{key_id}.p8'
+              key.touch(mode=0o600)
+              key.write_bytes(base64.b64decode(os.environ['ASC_API_KEY_P8_BASE64']))
+              for action in ('--validate-app', '--upload-app'):
+                  subprocess.run(['xcrun', 'altool', action, *arguments], cwd=directory, check=True)
+          PY
   release:
     if: github.event_name == 'push'
     needs: [prepare, ios, android]
