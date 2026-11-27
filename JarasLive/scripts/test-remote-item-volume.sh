@@ -27,16 +27,20 @@ try:
     subprocess.run(['swiftc','-swift-version','5','-target',os.uname().machine+'-apple-ios16.0-simulator',
         '-sdk',command('xcrun','--sdk','iphonesimulator','--show-sdk-path'),'-parse-as-library',
         str(folder/'Fixture.swift'),'-o',str(app/'VolumeProbe')], check=True)
-    # A hosted runner can lose its CoreSimulator device between boot and
-    # install. Retry the launch setup, while retaining every fixture assertion.
-    for attempt in range(3):
+    # Start with the runner's provisioned simulator. Creating a replacement
+    # on every retry restarts the first-boot data migration.
+    for attempt in range(2):
         try:
-            if isolated:
+            if isolated and attempt and not any(
+                d['udid'] == udid
+                for group in json.loads(command('xcrun','simctl','list','devices','available','-j'))['devices'].values()
+                for d in group
+            ):
                 udid = subprocess.check_output(
                     ['xcrun','simctl','create','CatLive Volume Test',device['deviceTypeIdentifier'],device['runtime']],
                     text=True, timeout=45).strip()
                 booted_here = True
-            subprocess.run(['xcrun','simctl','bootstatus',udid,'-b'], check=True, timeout=150)
+            subprocess.run(['xcrun','simctl','bootstatus',udid,'-b'], check=True, timeout=360)
             subprocess.run(['xcrun','simctl','install',udid,str(app)], check=True, timeout=150)
             installed = True
             container = pathlib.Path(subprocess.check_output(
@@ -46,16 +50,9 @@ try:
             subprocess.run(['xcrun','simctl','launch',udid,bundle], check=True, timeout=90)
             break
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
-            if attempt == 2:
+            if attempt == 1:
                 raise
             print(f'Retrying simulator setup after {error}', flush=True)
-            if isolated and udid != device['udid']:
-                try:
-                    subprocess.run(['xcrun','simctl','delete',udid], timeout=30,
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                except subprocess.TimeoutExpired:
-                    pass
-                udid, installed = device['udid'], False
     deadline = time.monotonic()+45
     while not result.exists() and time.monotonic()<deadline: time.sleep(.2)
     if not result.exists(): raise SystemExit('Remote item volume fixture timed out.')
@@ -65,7 +62,7 @@ finally:
     cleanup = []
     if isolated and udid != device['udid']:
         cleanup.append(['delete',udid])
-    elif not isolated:
+    else:
         if installed: cleanup.append(['uninstall',udid,bundle])
         if booted_here: cleanup.append(['shutdown',udid])
     for args in cleanup:
