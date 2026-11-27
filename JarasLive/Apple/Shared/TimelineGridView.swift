@@ -251,7 +251,7 @@ struct TimelineGridView: View, Equatable {
     }
     var body: some View {
         let _ = itemEditors.update(openFX: openItemFX, editText: editItemText)
-        TimelineGridContent(show: show, documents: documents, itemEditors: itemEditors, presentation: updates.state, revision: show.projectRevision, mixerRevision: show.mixerPlaybackRevision, songID: show.current?.id, focusRequest: show.regionFocusRequest, selectedRegion: show.selectedTimelineRegion, remotePresentation: remotePresentation, toggleMixer: toggleMixer, isSetlistVisible: isSetlistVisible, visibility: remotePresentation ? TrackVisibilityState() : trackVisibility.state(for: show.snapshot.project.id)).equatable()
+        TimelineGridContent(show: show, documents: documents, itemEditors: itemEditors, presentation: updates.state, revision: show.timelineContentRevision, mixerRevision: show.mixerPlaybackRevision, songID: show.current?.id, focusRequest: show.regionFocusRequest, selectedRegion: show.selectedTimelineRegion, remotePresentation: remotePresentation, toggleMixer: toggleMixer, isSetlistVisible: isSetlistVisible, visibility: remotePresentation ? TrackVisibilityState() : trackVisibility.state(for: show.snapshot.project.id)).equatable()
     }
 }
 /// A project notification reaches every warm row, but only changed control
