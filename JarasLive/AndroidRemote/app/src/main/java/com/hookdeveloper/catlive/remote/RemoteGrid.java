@@ -45,7 +45,8 @@ final class RemoteGrid extends View {
     float x(double seconds){return (float)((seconds-start()-offset)*pixelsPerSecond());}
     void clamp(){offset=Math.max(0,Math.min(duration()-duration()/zoom,offset));}
     @Override protected void onDraw(Canvas canvas){
-        JSONObject s=app.state;if(s==null)return;region=app.visibleRegion;String id=RemoteModel.id(region,"id");if(!id.equals(regionID)){regionID=id;zoom=1;offset=0;cancelNeedle();}
+        JSONObject s=app.state;if(s==null)return;
+        if (tablet) items.updateWaveforms(app.remote.gridWaveforms);region=app.visibleRegion;String id=RemoteModel.id(region,"id");if(!id.equals(regionID)){regionID=id;zoom=1;offset=0;cancelNeedle();}
         if(s.optBoolean("playing")||!app.remote.connected)cancelNeedle();
         if(!needleDragging&&Double.isFinite(needlePreview)&&(android.os.SystemClock.uptimeMillis()>needlePreviewUntil||Math.abs(s.optDouble("editPosition",s.optDouble("position"))-needlePreview)<.001))needlePreview=Double.NaN;
         canvas.drawColor(rgb(s.optLong("gridBackgroundColor",0x161616)));hits.clear();float width=getWidth(),height=getHeight();

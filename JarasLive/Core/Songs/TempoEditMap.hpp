@@ -62,16 +62,24 @@ class TempoEditMap {
     using Program = std::vector<RatePoint>;
     static Program program(const Song& song, const Part* part=nullptr) {
         if(!part) {
+            struct MarkerRange { const TimelineMarker* marker; double end; };
+            std::vector<MarkerRange> ranges;
             std::vector<double> times;
             if(song.markers)for(const auto& marker:*song.markers)if(marker.tempoBPM) {
+                const auto end=tempoPlayback::markerEnd(song,marker);
+                ranges.push_back({&marker,end});
                 times.push_back(marker.position);
-                const auto end=tempoPlayback::markerEnd(song,marker);if(std::isfinite(end))times.push_back(end);
+                if(std::isfinite(end))times.push_back(end);
             }
             std::sort(times.begin(),times.end());times.erase(std::unique(times.begin(),times.end()),times.end());
             Program result;
             for(const auto time:times) {
-                const auto* marker=tempoPlayback::active(song,time);
-                result.push_back({time,marker?tempoPlayback::rate(song,*marker):1.,marker?marker->id:ID{}});
+                const TimelineMarker* active=nullptr;
+                for(const auto& [marker,end]:ranges)
+                    if(marker->position<=time && time<end &&
+                       (!active || marker->position>active->position ||
+                        (marker->position==active->position && marker->id>active->id))) active=marker;
+                result.push_back({time,active?tempoPlayback::rate(song,*active):1.,active?active->id:ID{}});
             }
             return result;
         }

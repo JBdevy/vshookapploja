@@ -50,7 +50,7 @@ add_executable(PlaybackCapacityTests Tests/Core/PlaybackCapacityTests.cpp)
 target_link_libraries(PlaybackCapacityTests PRIVATE JarasLiveCore)
 add_test(NAME PlaybackCapacityTests COMMAND PlaybackCapacityTests)
 
-foreach(test IN ITEMS SharedItemBoundaryTests StopTransitionTests)
+foreach(test IN ITEMS SharedItemBoundaryTests StopTransitionTests ElasticTimeTests OverlapCrossfadeTests)
     add_executable(${test} Tests/Core/${test}.cpp)
     target_compile_features(${test} PRIVATE cxx_std_17)
     if(MSVC)

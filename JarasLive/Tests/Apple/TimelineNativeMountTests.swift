@@ -136,7 +136,9 @@ print("NATIVE_TIMELINE_MOUNTS_SHRINK_GROW_ORIGIN_PINNING_INPUT_AND_REUSE_OK")
     window.contentView = mount
     mount.headerInteractionHeight = 40
     var clicks = 0
+    var selectionClicks: [CGPoint] = []
     mount.headerInteraction = { clicks += 1 }
+    mount.regionSelectionInteraction = { selectionClicks.append(mount.convert($0, from: nil)) }
     func click(_ x: CGFloat, _ y: CGFloat, type: NSEvent.EventType = .leftMouseDown,
                windowNumber: Int? = nil) {
         let event = NSEvent.mouseEvent(with: type, location: mount.convert(CGPoint(x: x, y: y), to: nil),
@@ -159,6 +161,9 @@ print("NATIVE_TIMELINE_MOUNTS_SHRINK_GROW_ORIGIN_PINNING_INPUT_AND_REUSE_OK")
     other.isReleasedWhenClosed = false
     click(300, 20, windowNumber: other.windowNumber)
     precondition(clicks == 5, "Modal, hidden and unrelated windows cannot pause timeline navigation")
+    precondition(selectionClicks.count == 13 && selectionClicks.contains(CGPoint(x: 300, y: 250)),
+                 "Region deselection sees clicks outside the header and honors the window and input gates")
+    mount.regionSelectionInteraction = nil
     mount.headerInteraction = { clicks += 10 }
     click(300, 20)
     precondition(clicks == 15, "A reused mount uses its latest project callback")

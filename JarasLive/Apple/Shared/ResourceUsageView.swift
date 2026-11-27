@@ -106,38 +106,120 @@ enum ResourceMemoryScope { case application, device }
     }
 }
 
+enum TransportPanelColor: String, CaseIterable {
+    static let key = "jaras.transport.panelColor"
+    static let defaultColor: Self = .darkGray
+    case darkGray, lightGray, purple, black
+
+    static func resolved(_ preference: String) -> Self {
+        Self(rawValue: preference) ?? defaultColor
+    }
+
+    var title: String {
+        switch self {
+        case .darkGray: return "Cinza Dark"
+        case .lightGray: return "Cinza Light"
+        case .purple: return "Purple"
+        case .black: return "Black"
+        }
+    }
+
+    var topColor: Color {
+        switch self {
+        case .darkGray: return Color(hex: 0x262626)
+        case .lightGray: return Color(hex: 0x555555)
+        case .purple: return JarasTheme.proTransportTop
+        case .black: return .black
+        }
+    }
+
+    var gradient: Gradient {
+        switch self {
+        case .darkGray: return Gradient(colors: JarasTheme.desktopTransportGradient)
+        case .lightGray: return Gradient(colors: [Color(hex: 0x555555), Color(hex: 0x414141)])
+        case .purple: return JarasTheme.proTransportGradient
+        case .black: return Gradient(colors: [.black, .black])
+        }
+    }
+}
+
 struct TransportResourceMeters: View {
+    enum Placement {
+        case desktop, remote, nativeTransport, nativeFooter
+    }
+
+    @AppStorage(TransportPanelColor.key) private var panelColor = ""
     static let width: CGFloat = 132
-    var remote = false
+    var placement: Placement = .desktop
     @StateObject private var usage = ResourceUsage(memoryScope: .application, showsTotalMemory: false)
-    @ObservedObject private var midi = TransportMIDIActivity.shared
+    private var compactLabels: Bool { placement == .nativeTransport || placement == .nativeFooter }
+    private var showsDisk: Bool { placement == .desktop || placement == .nativeFooter }
 
     var body: some View {
         Group {
-            if remote {
-                HStack(spacing: 9) {
-                    meter("CPU", value: usage.cpu, help: "CPU used by CatLive")
-                    meter("RAM", value: usage.ram, help: "RAM used by CatLive")
-                }
-            } else {
+            switch placement {
+            case .desktop:
                 HStack(spacing: 9) {
                     VStack(spacing: 2) {
-                        meter("CPU", value: usage.cpu, help: "CPU used by CatLive")
-                        meter("RAM", value: usage.ram, help: "RAM used by CatLive")
+                        cpuMeter
+                        ramMeter
                     }
                     VStack(spacing: 2) {
-                        meter("HD", value: usage.disk, help: "Audio disk read and write load", warningAt: 90)
-                        meter("MIDI", value: midi.active ? 100 : 0, help: "MIDI input activity")
+                        diskMeter
+                        midiMeter
+                    }
+                }
+            case .remote, .nativeTransport:
+                HStack(spacing: 9) {
+                    cpuMeter
+                    ramMeter
+                }
+            case .nativeFooter:
+                HStack(spacing: 9) {
+                    diskMeter
+                    midiMeter
+                }
+            }
+        }.frame(width: Self.width).contentShape(Rectangle())
+            .contextMenu {
+                if placement == .desktop || placement == .nativeTransport {
+                    ForEach(TransportPanelColor.allCases, id: \.self) { color in
+                        Button { panelColor = color.rawValue } label: {
+                            Label(color.title, systemImage: TransportPanelColor.resolved(panelColor) == color ? "checkmark" : "circle")
+                        }
                     }
                 }
             }
-        }.frame(width: Self.width).task { await usage.run() }
-            .task { if !remote { await usage.runDisk() } }
+            .task { if placement != .nativeFooter { await usage.run() } }
+            .task { if showsDisk { await usage.runDisk() } }
     }
 
-    private func meter(_ label: String, value: Double?, help: String, warningAt: Double = .infinity) -> some View {
+    private var cpuMeter: some View {
+        Self.meter("CPU", value: usage.cpu, help: "CPU used by CatLive", compact: compactLabels)
+    }
+    private var ramMeter: some View {
+        Self.meter("RAM", value: usage.ram, help: "RAM used by CatLive", compact: compactLabels)
+    }
+    private var diskMeter: some View {
+        Self.meter("HD", value: usage.disk, help: "Audio disk read and write load", compact: compactLabels, warningAt: 90)
+    }
+    private var midiMeter: some View { MIDIMeter(compact: compactLabels) }
+
+    private struct MIDIMeter: View {
+        @ObservedObject private var activity = TransportMIDIActivity.shared
+        let compact: Bool
+
+        var body: some View {
+            TransportResourceMeters.meter("MIDI", value: activity.active ? 100 : 0,
+                                          help: "MIDI input activity", compact: compact)
+        }
+    }
+    private static func meter(_ label: String, value: Double?, help: String, compact: Bool,
+                              warningAt: Double = .infinity) -> some View {
         HStack(spacing: 4) {
-            Text(verbatim: label).font(.jarasSystem(size: 8, weight: .semibold))
+            Text(verbatim: label)
+                .font(compact ? .system(size: 7, weight: .semibold) : .jarasSystem(size: 8, weight: .semibold))
+                .lineLimit(1).minimumScaleFactor(0.8)
                 .foregroundStyle(JarasTheme.secondary).frame(width: 23, alignment: .leading)
             Capsule().fill(Color.white.opacity(0.15)).frame(height: 4)
                 .overlay(alignment: .leading) {

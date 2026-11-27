@@ -32,7 +32,7 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
     private static final int TRACK_VOLUME_READOUT_WIDTH = 36;
     private static final int TABLET_FADER_WIDTH = 186;
     private static final int TABLET_MIXER_WIDTH =
-            2 * TRACK_ROW_PADDING + TRACK_ICON_WIDTH + TRACK_VOLUME_READOUT_WIDTH + TABLET_FADER_WIDTH;
+            2 * TRACK_ROW_PADDING + TRACK_ICON_WIDTH + TRACK_VOLUME_READOUT_WIDTH + TABLET_FADER_WIDTH - 12;
     float tabletSetlist=.30f;
     FrameLayout root,content;
     final RemoteFadeout fadeout=new RemoteFadeout();
@@ -248,29 +248,13 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
             hide.setBackgroundColor(Color.TRANSPARENT);
         }
         column=column(this);work.addView(column,new LinearLayout.LayoutParams(0,-1,1));tabs=row(this);tabScroll=new HorizontalScrollView(this);tabScroll.setFillViewport(true);tabScroll.setHorizontalScrollBarEnabled(true);tabScroll.addView(tabs,new HorizontalScrollView.LayoutParams(-2,-1));tabScroll.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->{if(r-l!=or-ol)layoutProjectTabs(r-l);});if(!fullscreen&&!panel.equals("vinhetas"))column.addView(tabScroll,new LinearLayout.LayoutParams(-1,dp(tabletLayout()?28:30)));
-        if(horizontalToolbar()&&!fullscreen&&!panel.equals("notices")){
-            rail.removeAllViews();rail.setPadding(0,0,0,0);
-            for(String key:new String[]{"menu","mixer","parts","vinhetas","TP1","TP2","notices","clock","preview","setlist","grid"}){
-                Button button=railButtons.get(key);if(button==null)continue;
-                if(key.equals("preview")){button.icon("preview","Preview");button.getLayoutParams().width=dp(58);button.getLayoutParams().height=dp(28);}
-                rail.addView(button);
-            }
-            LinearLayout toolbar=row(this);toolbar.setGravity(Gravity.CENTER_VERTICAL);toolbar.setBackground(RemoteWidgets.panel(0));
-            HorizontalScrollView actions=new HorizontalScrollView(this);actions.setHorizontalScrollBarEnabled(false);actions.addView(rail,new HorizontalScrollView.LayoutParams(-2,-1));
-            toolbar.addView(actions,new LinearLayout.LayoutParams(0,-1,1));
-            if(director) {
-                TextView remoteMode=label(this,"Mode Remote Controller Desktop",11,GREEN);
-                remoteMode.setTypeface(bold);
-                remoteMode.setGravity(Gravity.CENTER_VERTICAL);
-                remoteMode.setSingleLine(true);
-                pad(remoteMode,8,0);
-                toolbar.addView(remoteMode,new LinearLayout.LayoutParams(-2,dp(28)));
-            }
-            toolbar.addView(batteryBadge,new LinearLayout.LayoutParams(dp(58),dp(32)));
-            toolbar.addView(railButtons.get("settings"),new LinearLayout.LayoutParams(dp(38),dp(32)));
-            column.addView(toolbar,new LinearLayout.LayoutParams(-1,dp(36)));
+        if(horizontalToolbar()) rail.removeAllViews();
+        transport=column(this);
+        if(!fullscreen&&!panel.equals("notices")&&!panel.equals("vinhetas")){
+            column.addView(transport,new LinearLayout.LayoutParams(-1,-2));
+            buildTransport();
         }
-        transport=column(this);if(!fullscreen&&!panel.equals("notices")&&!panel.equals("vinhetas")){column.addView(transport,new LinearLayout.LayoutParams(-1,-2));buildTransport();}
+        if(horizontalToolbar()&&!fullscreen&&!panel.equals("notices")) buildTabletPanelStrip();
         content=new FrameLayout(this);column.addView(content,new LinearLayout.LayoutParams(-1,0,1));
         if(panel.equals("vinhetas")&&director){vinhetas=new RemoteVinhetas(this);content.addView(vinhetas);}
         else if(tabletLayout()&&remote.mode.equals("observer")){
@@ -522,20 +506,25 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
     void refresh(){
         if(state==null)return;RemoteVinhetas.receiveFeedback(this);if(vinhetas!=null)vinhetas.refresh();JSONObject displays=state.optJSONObject("songDisplays");String name=RemoteModel.currentSongName(state);
         if (songProgress != null) songProgress.update(RemoteModel.transportDisplayRegion(state));
-        if(current!=null)current.setText(name);if(selectionTitle!=null)selectionTitle.setText(state.optBoolean("playing")?"Tocando":"Selecionada");if(playCaption!=null)playCaption.setText(state.optBoolean("playing")||state.optBoolean("paused")?"Stop":"Play");if(pauseCaption!=null)pauseCaption.setText(state.optBoolean("paused")?"Play":"Pause");
+        if(current!=null){current.setText(name);if(horizontalToolbar())current.setTextColor(state.optBoolean("playing")?GREEN:TEXT);}if(selectionTitle!=null)selectionTitle.setText(state.optBoolean("playing")?"Tocando":"Selecionada");if(playCaption!=null)playCaption.setText(state.optBoolean("playing")||state.optBoolean("paused")?"Stop":"Play");if(pauseCaption!=null)pauseCaption.setText(state.optBoolean("paused")?"Play":"Pause");
         if(play!=null){
             boolean playing=state.optBoolean("playing"), paused=state.optBoolean("paused");
             boolean stopping = playing || paused;
             String playTitle = stopping ? "Stop" : "Play";
-            play.transportIcon(stopping ? "stop" : "play", playTitle, playTitle);
+            play.transportIcon(stopping ? "stop" : "play", playTitle, horizontalToolbar() ? "" : playTitle);
             play.transportStyle(stopping ? RED : blend(0xff1d1d1d, 0xff24f06a, .45f), Color.WHITE);
             pause.transportIcon("pause",RemoteText.ui(paused?"Play":"Pause"),"");
             pause.transportStyle(paused ? YELLOW : 0xff454545, Color.WHITE);
+            if(horizontalToolbar()) {
+                play.transportStyle(stopping?RED:Color.TRANSPARENT,stopping?Color.WHITE:GREEN);
+                if(!paused) pause.transportStyle(Color.TRANSPARENT,Color.WHITE);
+            }
             pause.setEnabled(playing||paused);
             pause.setAlpha(1f);
             boolean loop = state.optBoolean("loop");
             repeat.transportIcon("repeat","Repeat","");
             repeat.transportStyle(loop ? YELLOW : 0xff454545, loop ? Color.BLACK : Color.WHITE);
+            if(horizontalToolbar()&&!loop) repeat.transportStyle(Color.TRANSPARENT,Color.WHITE);
         }
         if(bpm!=null){bpm.setText(String.format(Locale.US,"%s BPM",number(state.optDouble("bpm"))));bpm.setTextColor(state.optBoolean("tempoNeedsRender")?YELLOW:TEXT);}if(pitch!=null)pitch.setText(String.format(Locale.US,tabletLayout()?"%+d st":"Tuner\n%+dst",state.optInt("pitchSemitones")));
         if (save != null) {
@@ -557,14 +546,16 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
             boolean selected = switch (key) {
                 case "mixer" -> tabletLayout() ? panel.equals("grid") && mixerShown : panel.equals("mixer");
                 case "setlist" -> tabletLayout() ? setlistShown : panel.equals("setlist");
-                case "parts" -> panel.equals("parts") || horizontalPartsShown;
+                case "parts" -> panel.equals("parts") || partsShown || horizontalPartsShown;
                 case "vinhetas" -> tabletLayout() ? vinhetasOpen : panel.equals("vinhetas");
                 case "TP1" -> panel.equals("tp1");
                 case "TP2" -> panel.equals("tp2");
                 case "preview" -> state.optBoolean("previewActive");
                 default -> key.equals(panel);
             };
-            entry.getValue().style(selected ? GREEN : key.equals("preview") ? RED : TOOLBAR_INACTIVE, selected);
+            if (horizontalToolbar() && key.equals("setlist")) {
+                entry.getValue().transportStyle(selected?GREEN:0xff454545,selected?Color.BLACK:Color.WHITE);
+            } else entry.getValue().style(selected ? GREEN : key.equals("preview") ? RED : TOOLBAR_INACTIVE, selected);
         }
         refreshFadeout();
     }
@@ -670,41 +661,123 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
     void addRailSave(){
         save=rail("save","Salvar",()->confirm("Deseja salvar este projeto?","","Salvar",()->remote.action("save")));
     }
+    void buildTabletPanelStrip() {
+        LinearLayout strip=rail;
+        strip.setGravity(Gravity.CENTER_VERTICAL);
+        strip.setBackground(RemoteWidgets.panel(0));
+        pad(strip,4,0);
+        for (String key : new String[]{"mixer","parts","vinhetas"}) {
+            Button button=railButtons.get(key);
+            String title=key.equals("mixer")?"Track Mixer":key.equals("parts")?"Parts":"Pads";
+            button.icon="";
+            button.setText(title);
+            button.setTextSize(11);
+            button.setSingleLine(true);
+            button.leadingIcon(key);
+            strip.addView(button,tabletPanelControl(key.equals("mixer")?108:75,32));
+        }
+        strip.addView(new View(this),new LinearLayout.LayoutParams(0,1,1));
+        for (String key : new String[]{"grid","notices","clock","TP1","TP2","preview"}) {
+            Button button=railButtons.get(key);
+            switch (key) {
+                case "grid" -> nameTabletTool(button,key,"Grid");
+                case "notices" -> nameTabletTool(button,key,RemoteText.ui("Recados"));
+                case "clock" -> nameTabletTool(button,key,"Timer");
+                case "TP1","TP2" -> nameTabletTool(button,key.equals("TP1")?"teleprompter1":"teleprompter2",key);
+                case "preview" -> nameTabletTool(button,key,"PRW");
+            }
+            int width=key.equals("notices")?84:key.equals("clock")?74:64;
+            strip.addView(button,tabletPanelControl(width,32));
+        }
+        column.addView(strip,new LinearLayout.LayoutParams(-1,dp(38)));
+    }
+
+    private void nameTabletTool(Button button,String icon,String title) {
+        button.icon="";
+        button.setText(title);
+        button.setTextSize(11);
+        button.setSingleLine(true);
+        button.leadingIcon(icon);
+        button.setPadding(dp(27),0,dp(4),0);
+    }
+
+    private LinearLayout.LayoutParams tabletPanelControl(int width,int height) {
+        LinearLayout.LayoutParams result=new LinearLayout.LayoutParams(dp(width),dp(height));
+        result.setMargins(dp(2),0,dp(2),0);
+        return result;
+    }
+
     void buildTabletTransport(){
-        LinearLayout horizontal=row(this);horizontal.setGravity(Gravity.TOP);pad(horizontal,6,6);transport.addView(horizontal,new LinearLayout.LayoutParams(-1,dp(82)));
         LinearLayout middle=column(this);
-        horizontal.addView(middle,new LinearLayout.LayoutParams(-1,-1));
-        middle.setBackground(RemoteWidgets.surface(0xff10291c,0xff07100b,0xff505050,7));
-        LinearLayout display=row(this);
-        int displaySide=dp(198);
+        pad(middle,6,3);
+        middle.setBackground(RemoteWidgets.surface(0xff262626,0xff151515,0xff505050,7));
+        transport.addView(middle,new LinearLayout.LayoutParams(-1,-2));
+        FrameLayout display=new FrameLayout(this);
+        middle.addView(display,new LinearLayout.LayoutParams(-1,dp(49)));
+        Button file=railButtons.get("menu");
+        file.setContentDescription("File");
+        display.addView(file,new FrameLayout.LayoutParams(dp(34),dp(32),Gravity.TOP|Gravity.LEFT));
         tabletInformation=centered("",10,YELLOW,true);
-        tabletInformation.setSingleLine();
-        tabletInformation.setAutoSizeTextTypeUniformWithConfiguration(7,10,1,android.util.TypedValue.COMPLEX_UNIT_SP);
-        display.addView(tabletInformation,new LinearLayout.LayoutParams(displaySide,dp(28)));
-        current=centered("",14,TEXT,true);
+        tabletInformation.setMaxLines(2);
+        FrameLayout.LayoutParams info=new FrameLayout.LayoutParams(dp(88),dp(32),Gravity.TOP|Gravity.LEFT);
+        info.leftMargin=dp(38);
+        display.addView(tabletInformation,info);
+
+        current=centered("",15,TEXT,true);
         current.setSingleLine();
         current.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        display.addView(current,new LinearLayout.LayoutParams(0,dp(28),1));
-        LinearLayout actions=row(this);actions.setGravity(Gravity.END|Gravity.CENTER_VERTICAL);
-        actions.addView(new RemoteResourceMeters(this),new LinearLayout.LayoutParams(dp(126),dp(18)));
+        FrameLayout.LayoutParams title=new FrameLayout.LayoutParams(-1,dp(32),Gravity.TOP|Gravity.CENTER_HORIZONTAL);
+        title.setMargins(dp(130),0,dp(130),0);
+        display.addView(current,title);
+
+        LinearLayout status=column(this);
+        status.setGravity(Gravity.RIGHT);
+        LinearLayout device=row(this);
+        device.addView(batteryBadge,new LinearLayout.LayoutParams(dp(58),dp(32)));
+        device.addView(railButtons.get("settings"),tabletPanelControl(34,32));
+        status.addView(device);
+        status.addView(new RemoteResourceMeters(this),new LinearLayout.LayoutParams(dp(126),dp(16)));
+        display.addView(status,new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.RIGHT));
+
+        LinearLayout controls=row(this);
+        controls.setGravity(Gravity.CENTER_VERTICAL);
+        middle.addView(controls,new LinearLayout.LayoutParams(-1,dp(44)));
+        LinearLayout playback=tabletTransportGroup(controls,0,1);
+        addTransportButtons(playback,true);
+
+        LinearLayout tempo=tabletTransportGroup(controls,100,0);
+        tempo.addView(new Button(this,"−",()->remote.action("tempo",null,Math.max(20,state.optDouble("bpm")-1))),new LinearLayout.LayoutParams(dp(25),-1));
+        bpm=centered("",13,TEXT,true);
+        configureTempoField(bpm);
+        tempo.addView(bpm,new LinearLayout.LayoutParams(0,-1,1));
+        tempo.addView(new Button(this,"+",()->remote.action("tempo",null,Math.min(400,state.optDouble("bpm")+1))),new LinearLayout.LayoutParams(dp(25),-1));
+
+        LinearLayout tuner=tabletTransportGroup(controls,126,0);
+        tuner.addView(centered("Tuner",10,TEXT,true),new LinearLayout.LayoutParams(dp(34),-1));
+        tuner.addView(new Button(this,"−",()->pitch(-1)),new LinearLayout.LayoutParams(dp(24),-1));
+        pitch=centered("",12,GREEN,true);
+        tuner.addView(pitch,new LinearLayout.LayoutParams(0,-1,1));
+        tuner.addView(new Button(this,"+",()->pitch(1)),new LinearLayout.LayoutParams(dp(24),-1));
+
         save=new Button(this,"",()->confirm("Deseja salvar este projeto?","","Salvar",()->remote.action("save")));
         save.icon("save",RemoteText.ui("Salvar"));
-        actions.addView(save,new LinearLayout.LayoutParams(dp(72),dp(28)));
-        display.addView(actions,new LinearLayout.LayoutParams(displaySide,dp(28)));
-        middle.addView(display);
-
-        LinearLayout controls=row(this);addTransportButtons(controls,true);
-        Button minus=new Button(this,"−",()->remote.action("tempo",null,Math.max(20,state.optDouble("bpm")-1)));controls.addView(minus,new LinearLayout.LayoutParams(dp(22),dp(28)));bpm=label(this,"",12,TEXT);bpm.setGravity(Gravity.CENTER);configureTempoField(bpm);controls.addView(bpm,new LinearLayout.LayoutParams(dp(66),dp(28)));Button plus=new Button(this,"+",()->remote.action("tempo",null,Math.min(400,state.optDouble("bpm")+1)));controls.addView(plus,new LinearLayout.LayoutParams(dp(22),dp(28)));
-        Button pitchDown=new Button(this,"−",()->pitch(-1));controls.addView(pitchDown,new LinearLayout.LayoutParams(dp(22),dp(28)));pitch=label(this,"",12,GREEN);pitch.setGravity(Gravity.CENTER);controls.addView(pitch,new LinearLayout.LayoutParams(dp(44),dp(28)));Button pitchUp=new Button(this,"+",()->pitch(1));controls.addView(pitchUp,new LinearLayout.LayoutParams(dp(22),dp(28)));space(middle,2);
-        middle.addView(controls);
-        addTransportProgress(middle);
-        Button setlist = new Button(this,"",()->{setlistShown=!setlistShown;buildWorkspace();});
+        controls.addView(save,tabletPanelControl(34,44));
+        Button setlist=railButtons.get("setlist");
         setlist.transportIcon("setlist","Setlist","");
-        setlist.transportStyle(setlistShown ? GREEN : 0xff454545, setlistShown ? Color.BLACK : Color.WHITE);
-        LinearLayout.LayoutParams setlistLp = new LinearLayout.LayoutParams(dp(72),dp(28));
-        setlistLp.leftMargin = dp(6);
-        controls.addView(setlist,setlistLp);
+        controls.addView(setlist,tabletPanelControl(34,44));
+        addTransportProgress(middle);
     }
+
+    private LinearLayout tabletTransportGroup(LinearLayout controls,int width,float weight) {
+        LinearLayout group=row(this);
+        group.setGravity(Gravity.CENTER_VERTICAL);
+        group.setBackground(RemoteWidgets.surface(0xff353535,0xff303030,0xff505050,6));
+        LinearLayout.LayoutParams size=new LinearLayout.LayoutParams(dp(width),dp(44),weight);
+        size.rightMargin=dp(6);
+        controls.addView(group,size);
+        return group;
+    }
+
     void addTransportButtons(LinearLayout buttons,boolean tablet){
         play=new Button(this,"Play",()->remote.action(state.optBoolean("playing")||state.optBoolean("paused")?"stop":"play"));
         play.transportIcon("play","Play","Play");
@@ -728,7 +801,7 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
             if (!tablet && button == fadeoutControl) button.setPadding(dp(2),dp(9),dp(2),dp(5));
             else button.setPadding(dp(2),0,dp(2),0);
             if(button==fadeoutControl)button.setAutoSizeTextTypeUniformWithConfiguration(7,11,1,android.util.TypedValue.COMPLEX_UNIT_SP);
-            LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,dp(tablet?28:44),1);
+            LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,dp(tablet?38:44),1);
             if(!tablet&&button!=play)lp.leftMargin=dp(4);
             buttons.addView(button,lp);
         }

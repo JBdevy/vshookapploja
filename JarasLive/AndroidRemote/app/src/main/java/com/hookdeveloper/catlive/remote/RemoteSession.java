@@ -81,9 +81,9 @@ final class RemoteSession {
     void changed(){if(listener!=null)listener.onChanged();}
     void message(String text){main.post(()->{if(listener!=null)listener.onMessage(text);});}
     void resume(){if(closed||(active&&(connected||connecting)))return;active=true;if(selected!=null)connect(selected);else browse();}
-    void suspend(){cancelBlockFeedback();feedback.clear();if(confirmedState!=null)state=confirmedState;active=false;generation++;disconnectSocket();connected=false;connecting=false;stopDiscovery();changed();}
+    void suspend(){resetWaveforms("");cancelBlockFeedback();feedback.clear();if(confirmedState!=null)state=confirmedState;active=false;generation++;disconnectSocket();connected=false;connecting=false;stopDiscovery();changed();}
     void close(){closed=true;suspend();mainAudio.close();connectivity.unregisterNetworkCallback(networkCallback);reader.shutdownNow();writer.shutdownNow();images.evictAll();}
-    void exit(){cancelBlockFeedback();projectOpening.clear();feedback.clear();confirmedState=null;selected=null;resumeMode="";resumePin="";mode="";state=null;sequence=0;subscription=0;noticeRequests.clear();generation++;disconnectSocket();connected=false;connecting=false;status="";browse();changed();}
+    void exit(){resetWaveforms("");cancelBlockFeedback();projectOpening.clear();feedback.clear();confirmedState=null;selected=null;resumeMode="";resumePin="";mode="";state=null;sequence=0;subscription=0;noticeRequests.clear();generation++;disconnectSocket();connected=false;connecting=false;status="";browse();changed();}
     void browse(){
         if(!active||closed)return;stopDiscovery();peers.clear();status="Procurando PCs…";changed();
         final int token=++discoveryGeneration;
@@ -141,6 +141,7 @@ final class RemoteSession {
             connection.setSoTimeout(0);
             main.post(()->{if(token!=generation)return;connected=true;connecting=false;peerName=name;status="Conectado";stopDiscovery();changed();});
             while(!connection.isClosed()&&token==generation){byte[] payload=keys.open(RemoteWire.readFrame(in));RemoteCipher.check(payload.length>5&&payload[0]==1&&payload[1]==0x4a&&payload[2]==0x4c&&payload[3]==2);int kind=payload[4]&255;
+                if(kind==12){decodeWaveformPage(payload,token);continue;}
                 if(kind==10){if(token==generation)mainAudio.enqueue(payload);continue;}
                 if(kind==4){RemoteCipher.check(payload.length>=37);java.nio.ByteBuffer b=java.nio.ByteBuffer.wrap(payload,5,32);String project=new UUID(b.getLong(),b.getLong()).toString(),id=new UUID(b.getLong(),b.getLong()).toString();byte[] bytes=Arrays.copyOfRange(payload,37,payload.length);RemoteCipher.check(bytes.length<=1572864);BitmapFactory.Options options=new BitmapFactory.Options();options.inJustDecodeBounds=true;BitmapFactory.decodeByteArray(bytes,0,bytes.length,options);if(options.outWidth>0&&options.outHeight>0){options.inJustDecodeBounds=false;options.inSampleSize=1;while(Math.max(options.outWidth,options.outHeight)/options.inSampleSize>2048)options.inSampleSize*=2;Bitmap bitmap=BitmapFactory.decodeByteArray(bytes,0,bytes.length,options);main.post(()->{if(token==generation&&RemoteModel.same(project,RemoteModel.id(state,"project"))&&bitmap!=null){images.put(id.toLowerCase(Locale.ROOT),bitmap);changed();}});}continue;}
                 String json=new String(payload,5,payload.length-5,java.nio.charset.StandardCharsets.UTF_8);
@@ -151,24 +152,92 @@ final class RemoteSession {
         }catch(Exception e){if(token==generation)main.post(()->{lastError=e.getMessage()==null?"Conexão interrompida":e.getMessage();});}
         finally{try{connection.close();}catch(IOException ignored){}main.post(()->lost(token));}
     }
+    private static final int WAVEFORM_PAGE_SIZE = 32;
+    private static final int WAVEFORM_MAX_ITEMS = 65536;
+    Map<String,byte[]> gridWaveforms = Collections.emptyMap();
+    private Map<String,byte[]> stagedWaveforms = new HashMap<>();
+    private String waveformRevision = "";
+    private int waveformOffset;
+    private Runnable retryWaveforms;
+
+    private void resetWaveforms(String revision) {
+        if (retryWaveforms != null) main.removeCallbacks(retryWaveforms);
+        retryWaveforms = null;
+        waveformRevision = revision;
+        waveformOffset = 0;
+        stagedWaveforms = new HashMap<>();
+        gridWaveforms = Collections.emptyMap();
+    }
+
+    private void requestWaveforms() {
+        if (waveformRevision.isEmpty() || !connected || !mode.equals("director")) return;
+        try {
+            JSONObject request = new JSONObject().put("revision",waveformRevision).put("offset",waveformOffset);
+            sendPacket(11,request,generation);
+            if (retryWaveforms != null) main.removeCallbacks(retryWaveforms);
+            retryWaveforms = this::requestWaveforms;
+            main.postDelayed(retryWaveforms,12_000);
+        } catch (JSONException ignored) {}
+    }
+
+    private void receiveWaveforms(JSONObject page,Map<String,byte[]> entries,int token) {
+        if (token != generation || !connected || !mode.equals("director") || retryWaveforms == null ||
+                !RemoteModel.same(waveformRevision,page.optString("revision")) || page.optInt("offset",-1) != waveformOffset) return;
+        main.removeCallbacks(retryWaveforms);
+        retryWaveforms = null;
+        stagedWaveforms.putAll(entries);
+        waveformOffset += WAVEFORM_PAGE_SIZE;
+        if (page.optBoolean("finished") || waveformOffset >= WAVEFORM_MAX_ITEMS) {
+            gridWaveforms = Collections.unmodifiableMap(stagedWaveforms);
+            stagedWaveforms = new HashMap<>();
+            changed();
+        } else requestWaveforms();
+    }
+
+    private void decodeWaveformPage(byte[] payload,int token) {
+        if (payload.length > 32773 || !RemoteWidgets.tablet) return;
+        try {
+            JSONObject page = new JSONObject(new String(payload,5,payload.length-5,java.nio.charset.StandardCharsets.UTF_8));
+            JSONArray rows = page.getJSONArray("entries");
+            if (rows.length() > WAVEFORM_PAGE_SIZE || !(page.get("finished") instanceof Boolean)) return;
+            Map<String,byte[]> entries = new HashMap<>();
+            for (int i=0;i<rows.length();i++) {
+                JSONObject row=rows.getJSONObject(i);
+                String id=UUID.fromString(row.getString("id")).toString().toLowerCase(Locale.ROOT);
+                byte[] peaks=android.util.Base64.decode(row.getString("peaks"),android.util.Base64.DEFAULT);
+                if (peaks.length != 256) return;
+                entries.put(id,peaks);
+            }
+            main.post(()->receiveWaveforms(page,entries,token));
+        } catch (JSONException | IllegalArgumentException ignored) {}
+    }
+
     private void publishNext(int token){
         if(token!=generation)return;JSONObject value=nextState.getAndSet(null);if(value==null)return;
         mainAudioAvailable = value.optBoolean("mainAudioAvailable");
         updateMainAudio();
         if(!RemoteModel.same(RemoteModel.id(value,"project"),RemoteModel.id(state,"project"))){images.evictAll();requestedImages.clear();}
+        String revision = RemoteWidgets.tablet && mode.equals("director") ? RemoteModel.id(value,"waveformRevision") : "";
+        if (!waveformRevision.equals(revision)) {
+            resetWaveforms(revision);
+            requestWaveforms();
+        }
         projectOpening.receive(value);confirmedState=value;state=feedback.receive(receiveBlockFeedback(value),SystemClock.elapsedRealtime());changed();
     }
     private void accessStatus(JSONObject value,int token){
         if(token!=generation)return;
         String newMode = RemoteModel.id(value,"mode");
-        if (!mode.equals(newMode)) resetMainAudio();
+        if (!mode.equals(newMode)) {
+            resetMainAudio();
+            resetWaveforms("");
+        }
         requiresPin=value.optBoolean("requiresPIN");noticesPin=value.optBoolean("noticesRequiresPIN");mode=newMode;lastError=value.optString("error","");
         if(!mode.isEmpty()){status="Conectado";if(subscription!=0)subscribe(subscription);}
         else if(!resumeMode.isEmpty()&&lastError.isEmpty())requestAccess(resumeMode,resumePin);
         else if(!lastError.isEmpty()){resumeMode="";resumePin="";}
         changed();
     }
-    private void lost(int token){if(token!=generation||closed)return;resetMainAudio();cancelBlockFeedback();feedback.clear();if(confirmedState!=null)state=confirmedState;connected=false;connecting=false;mode="";status=selected==null?"Desconectado":"Reconectando a "+selected.name+"…";noticeRequests.clear();requestedImages.clear();nextState.set(null);changed();if(active){browse();main.postDelayed(()->{if(token==generation&&selected!=null&&!connected&&!connecting&&active)connect(selected);},2500);}}
+    private void lost(int token){if(token!=generation||closed)return;resetWaveforms("");resetMainAudio();cancelBlockFeedback();feedback.clear();if(confirmedState!=null)state=confirmedState;connected=false;connecting=false;mode="";status=selected==null?"Desconectado":"Reconectando a "+selected.name+"…";noticeRequests.clear();requestedImages.clear();nextState.set(null);changed();if(active){browse();main.postDelayed(()->{if(token==generation&&selected!=null&&!connected&&!connecting&&active)connect(selected);},2500);}}
     private synchronized void disconnectSocket(){resetMainAudio();Socket s=socket;socket=null;if(s!=null)try{s.close();}catch(IOException ignored){}nextState.set(null);}
     boolean receivesMainAudio() { return receivesMainAudio; }
     void setReceivesMainAudio(boolean enabled) {

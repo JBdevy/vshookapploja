@@ -303,6 +303,12 @@ public final class ShowTrackSelectionPresentation: ObservableObject {
         selectedTimelineRegion = selection.contains(id) ? id : ordered.first(where: selection.contains)
         pauseTimelineFollow()
     }
+    public func clearTimelineRegionSelection() {
+        guard !selectedTimelineRegions.isEmpty || selectedTimelineRegion != nil else { return }
+        selectedTimelineRegions.removeAll()
+        selectedTimelineRegion = nil
+        timelineRegionSelectionAnchor = nil
+    }
     private var timelineFollowResume: DispatchWorkItem?
     public func pauseTimelineFollow(resumingAfter delay: TimeInterval? = nil) {
         guard current != nil else { return }
@@ -2527,7 +2533,7 @@ public final class ShowTrackSelectionPresentation: ObservableObject {
         let began = profile ? ProcessInfo.processInfo.systemUptime : 0
         #endif
         if command == .play && preparingAudio { return }
-        if [.pause, .stop, .stopAll, .subPlay, .subStop, .editSeek, .seek, .queueBeatSeek, .select, .selectRegion,
+        if [.pause, .stop, .stopAll, .subPlay, .subStop, .editSeek, .seek, .queueBeatSeek, .queueBarSeek, .queueMarkerSeek, .queuePartSeek, .select, .selectRegion,
             .queueRegion, .queueSection, .next, .previous, .escape].contains(command), preparingAudio {
             cancelPendingPlayback()
         }
@@ -2537,7 +2543,7 @@ public final class ShowTrackSelectionPresentation: ObservableObject {
         let enablingRepeat = command == .toggleLoop && !snapshot.transport.loop.enabled
         let armingPart = command == .queueSection && snapshot.transport.playing && snapshot.transport.queuedSectionMarkerId != target
         if enablingRepeat, rejectOverCapacity(assumingPlayback: true) { return }
-        if command == .queueBeatSeek && snapshot.transport.playing && rejectOverCapacity(at: value) { return }
+        if command.queuesTimelineSeek && snapshot.transport.playing && rejectOverCapacity(at: value) { return }
         if armingPart {
             if rejectOverCapacity() { return }
             let destination = current?.markers?.first(where: { $0.id == target && $0.isSection })?.position
@@ -2582,7 +2588,7 @@ public final class ShowTrackSelectionPresentation: ObservableObject {
                 guard canQueuePlaylistEntry(region.id) else { return }
                 try executor.execute(isPlaylistDuplicate(region.id) ? .queueRegion : .selectRegion, target: region.id, value: 0)
                 selectedSetlistBlock = nil
-            } else if [.editSeek, .seek, .queueBeatSeek, .select, .selectRegion, .queueRegion, .queueSection, .next, .previous].contains(command) {
+            } else if [.editSeek, .seek, .queueBeatSeek, .queueBarSeek, .queueMarkerSeek, .queuePartSeek, .select, .selectRegion, .queueRegion, .queueSection, .next, .previous].contains(command) {
                 selectedSetlistBlock = nil
             }
             if command == .toggleLoop, !previous.loop.enabled, let range = selectedLoopArea() {
@@ -2684,7 +2690,7 @@ public final class ShowTrackSelectionPresentation: ObservableObject {
             if scheduledRecording { audioUpdate(snapshot, audioProjectRevision) }
             if disabledAuto { markChanged(refreshAudio: false, preservingMediaStorage: true) }
             focusPreparedRegion(previous: previous)
-            if command == .editSeek || command == .queueBeatSeek || (command == .queueSection && !snapshot.transport.playing) {
+            if command == .editSeek || command.queuesTimelineSeek || (command == .queueSection && !snapshot.transport.playing) {
                 navigationFocusPosition = nil
                 focusTimelineRegion(at: snapshot.transport.editPosition ?? snapshot.transport.position)
             } else if command == .seek || (command == .play && !previous.playing) {
@@ -3392,7 +3398,7 @@ public final class ShowTrackSelectionPresentation: ObservableObject {
     /// FX edit: replaying the captured preset or publishing an old transport
     /// sample to audio here can interrupt playback during Save.
     @discardableResult public func storeCapturedPluginState(_ track: UUID?, clip: UUID? = nil, identifier: String,
-                                                            componentState: String?, controllerState: String?) throws -> Bool {
+                                                           componentState: String?, controllerState: String?, araState: String? = nil) throws -> Bool {
         let location: (song: Int, track: Int, clip: Int)?
         if let clip {
             location = snapshot.project.songs.indices.lazy.compactMap { song in
@@ -3409,9 +3415,11 @@ public final class ShowTrackSelectionPresentation: ObservableObject {
         var settings = clip.map(clipFXSettings) ?? fxSettings(track)
         guard let index = settings.externalPlugins?.firstIndex(where: { $0.id == identifier }) else { return false }
         guard settings.externalPlugins?[index].componentState != componentState ||
-                settings.externalPlugins?[index].controllerState != controllerState else { return false }
+                settings.externalPlugins?[index].controllerState != controllerState ||
+                (araState != nil && settings.externalPlugins?[index].araState != araState) else { return false }
         settings.externalPlugins?[index].componentState = componentState
         settings.externalPlugins?[index].controllerState = controllerState
+        if let araState { settings.externalPlugins?[index].araState = araState }
         do {
             if let clip, let location {
                 try settings.validateForClip(); try executor.setClipFX(clip, settings: settings)
@@ -4663,13 +4671,14 @@ public final class ShowTrackSelectionPresentation: ObservableObject {
             }
         } catch { message = error.localizedDescription }
     }
-    public func renameTimelineLabel(_ id: UUID, name: String, region: Bool, includesUnified: Bool = false) {
+    public func renameTimelineLabel(_ id: UUID, name: String, region: Bool, includesUnified: Bool = false, includesParts: Bool = false) {
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, let song = current?.id else { return }
         editProject(refreshAudio: false) { project in
             guard let index = project.songs.firstIndex(where: { $0.id == song }) else { return }
             let markerIndex = region ? nil : project.songs[index].markers?.firstIndex(where: {
-                $0.id == id && $0.isNavigationMarker && (includesUnified || ($0.unifiedRegionID == nil && $0.sourceRegionID == nil))
+                $0.id == id && ($0.isNavigationMarker || (includesParts && $0.isSection && !$0.isTempo)) &&
+                (includesUnified || ($0.unifiedRegionID == nil && $0.sourceRegionID == nil))
             })
             let regionID = region ? id : markerIndex.flatMap { project.songs[index].markers?[$0].sourceRegionID }
             if let regionID, let part = project.songs[index].parts.firstIndex(where: { $0.id == regionID }) {

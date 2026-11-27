@@ -1,6 +1,14 @@
 import SwiftUI
 import ImageIO
 
+enum TimelineEditingBarMetrics {
+    static let controlHeight: CGFloat = 28
+    static let height: CGFloat = 36
+    static let labelSize: CGFloat = 11
+    static let sliderWidth: CGFloat = 96
+    static let groupSpacing: CGFloat = 14
+}
+
 private struct JarasNativePaletteKey: EnvironmentKey {
     static let defaultValue = false
 }
@@ -205,14 +213,27 @@ extension EnvironmentValues {
     }
 }
 
+private struct DesktopEditingStripChromeKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var desktopEditingStripChrome: Bool {
+        get { self[DesktopEditingStripChromeKey.self] }
+        set { self[DesktopEditingStripChromeKey.self] = newValue }
+    }
+}
+
 struct DesktopToolbarChrome: ViewModifier {
+    @Environment(\.desktopEditingStripChrome) private var editingStrip
     @Environment(\.compactDesktopToolbar) private var compact
     var tone: DesktopToolbarTone
 
     func body(content: Content) -> some View {
         content.font(.jarasSystem(size: compact ? 12 : 14, weight: .semibold))
             .foregroundStyle(tone.foreground)
-            .lineLimit(1).fixedSize().padding(.horizontal, compact ? 2 : 6).frame(height: 24)
+            .lineLimit(1).fixedSize().padding(.horizontal, compact ? 2 : 6).frame(height: editingStrip ? TimelineEditingBarMetrics.controlHeight : 24)
+            .background(editingStrip ? Color(hex: 0x454545) : .clear, in: RoundedRectangle(cornerRadius: 6))
             .overlay { RoundedRectangle(cornerRadius: 4).strokeBorder(.white.opacity(0.14), lineWidth: 0.7).allowsHitTesting(false) }
             .contentShape(Rectangle())
     }
@@ -224,14 +245,20 @@ struct DesktopToolbarLabel: View {
     var active = false
     @Environment(\.compactDesktopToolbar) private var compact
     var tone: DesktopToolbarTone? = nil
+    var showsTitle = false
 
     var body: some View {
-        ControlIcon(name: systemImage, active: (tone ?? (active ? .selected : .neutral)) != .neutral, size: compact ? 16 : 18, toolbar: true)
-            .accessibilityElement(children: .ignore)
-            .frame(width: compact ? 16 : 18, height: compact ? 16 : 18)
-            .modifier(DesktopToolbarChrome(tone: tone ?? (active ? .selected : .neutral)))
-            .accessibilityLabel(Text(LocalizedStringKey(title)))
-            .desktopIconTooltip(title == "File" ? nil : title)
+        let style = tone ?? (active ? .selected : .neutral)
+        let iconSize: CGFloat = compact || showsTitle ? 16 : 18
+        HStack(spacing: 4) {
+            ControlIcon(name: systemImage, active: style != .neutral, size: iconSize, toolbar: true)
+                .frame(width: iconSize, height: iconSize)
+            if showsTitle { Text(verbatim: title).font(.jarasSystem(size: TimelineEditingBarMetrics.labelSize, weight: .semibold)) }
+        }
+        .accessibilityElement(children: .ignore)
+        .modifier(DesktopToolbarChrome(tone: style))
+        .accessibilityLabel(Text(LocalizedStringKey(title)))
+        .desktopIconTooltip(title == "File" ? nil : title)
     }
 }
 

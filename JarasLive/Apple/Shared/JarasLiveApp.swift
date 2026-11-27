@@ -117,6 +117,7 @@ import UIKit
     }
 }
 struct RootView: View {
+    @AppStorage(TransportPanelColor.key) private var transportPanelColor = ""
     @AppStorage(JarasInterfaceTheme.preferenceKey) private var interfaceTheme = JarasInterfaceTheme.defaultTheme
     @AppStorage("jaras.language") private var language = "en"
     @ObservedObject var container: AppContainer
@@ -183,13 +184,20 @@ struct RootView: View {
                                        returnToProject: documents.ready ? { browsingDesktop = false } : nil,
                                        navigation: desktopBrowserRequest)
                         .frame(width: 600, height: 432)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                        .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(interfaceTheme.line).allowsHitTesting(false) }
-                        .shadow(color: .black.opacity(0.60), radius: 20, y: 6)
+                        .clipShape(RoundedRectangle(cornerRadius: documents.ready ? 10 : 0))
+                        .overlay {
+                            if documents.ready {
+                                RoundedRectangle(cornerRadius: 10).strokeBorder(interfaceTheme.line).allowsHitTesting(false)
+                            }
+                        }
+                        .shadow(color: documents.ready ? .black.opacity(0.60) : .clear, radius: 20, y: 6)
                         .opacity(desktopBrowserVisible ? 1 : 0)
                         .allowsHitTesting(desktopBrowserVisible)
                         .accessibilityHidden(!desktopBrowserVisible)
                     if !documents.ready { ProjectTitlebarContent { EmptyView() } }
+                }
+                .background {
+                    if !documents.ready { interfaceTheme.homeBackground.ignoresSafeArea() }
                 }
                 #endif
             }
@@ -208,11 +216,11 @@ struct RootView: View {
         .background(TrialTitlebar(auth: auth))
         .background(ProjectWindowSizing(editor: canEnter && (documents.ready || documents.projectTabCount > 1),
                                         login: desktopLoginVisible, documents: documents,
-                                        chromeColor: canEnter && documents.ready ? JarasTheme.proTransportTop : interfaceTheme.titlebar))
+                                        chromeColor: canEnter && documents.ready ? TransportPanelColor.resolved(transportPanelColor).topColor : interfaceTheme.titlebar))
         .overlay {
             GeometryReader { geometry in
                 let inWorkspace = canEnter && documents.ready
-                (inWorkspace ? JarasTheme.proTransportTop : interfaceTheme.titlebar)
+                (inWorkspace ? TransportPanelColor.resolved(transportPanelColor).topColor : interfaceTheme.titlebar)
                     .frame(height: geometry.safeAreaInsets.top)
                     .overlay(alignment: .bottom) {
                         if !inWorkspace { Rectangle().fill(JarasTheme.line.opacity(0.65)).frame(height: 1) }

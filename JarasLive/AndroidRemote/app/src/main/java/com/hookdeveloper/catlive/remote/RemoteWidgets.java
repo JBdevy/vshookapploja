@@ -330,7 +330,12 @@ final class RemoteWidgets {
                 canvas.drawText(read,w/2,h-dp(2),paint);
             }
         }
+        private final Path tabletFaderThumb = new Path();
         private void drawMixerFace(Canvas canvas,float left,float right,float x,float y){
+            if (tablet) {
+                drawTabletFader(canvas,left,right,x,y);
+                return;
+            }
             float railRadius=7*density, border=.75f*density;
             paint.setColor(0xff2d3236);
             canvas.drawRoundRect(left,y-railRadius,right,y+railRadius,railRadius,railRadius,paint);
@@ -345,6 +350,36 @@ final class RemoteWidgets {
             canvas.drawRoundRect(x-halfWidth+border,top+border,x+halfWidth-border,bottom-border,radius-border,radius-border,paint);
             paint.setShader(null);
             paint.setColor(selected?0xff42310b:0xffeff4f4);
+            canvas.drawRect(x-.75f*density,y-4.5f*density,x+.75f*density,y+4.5f*density,paint);
+        }
+        private static final float[] TABLET_THUMB = {
+            -.35f,-.5f, .35f,-.5f, .5f,-.39f, .29f,0, .5f,.39f,
+            .35f,.5f, -.35f,.5f, -.5f,.39f, -.29f,0, -.5f,-.39f
+        };
+        private void drawTabletFader(Canvas canvas,float left,float right,float x,float y) {
+            float halfRail=7*density, radius=3*density, border=.75f*density;
+            paint.setColor(0xff2d3236);
+            canvas.drawRoundRect(left,y-halfRail,right,y+halfRail,radius,radius,paint);
+            paint.setColor(0xff242424);
+            canvas.drawRoundRect(left+border,y-halfRail+border,right-border,y+halfRail-border,radius-border,radius-border,paint);
+            boolean selected=isSelected();
+            tabletFaderThumb.rewind();
+            float width=(11-.85f)*density, height=(18-.85f)*density;
+            tabletFaderThumb.moveTo(x+TABLET_THUMB[0]*width,y+TABLET_THUMB[1]*height);
+            for(int i=2;i<TABLET_THUMB.length;i+=2)
+                tabletFaderThumb.lineTo(x+TABLET_THUMB[i]*width,y+TABLET_THUMB[i+1]*height);
+            tabletFaderThumb.close();
+            paint.setShader(new LinearGradient(0,y-height/2,0,y+height/2,selected?YELLOW:0xff513553,
+                    selected?0xffc99622:0xff402346,Shader.TileMode.CLAMP));
+            canvas.drawPath(tabletFaderThumb,paint);
+            paint.setShader(null);
+            paint.setColor(selected?0xffffec9c:0xff9565a0);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(.85f*density);
+            paint.setStrokeJoin(Paint.Join.ROUND);
+            canvas.drawPath(tabletFaderThumb,paint);
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(selected?0xff42310b:0xfffff9ff);
             canvas.drawRect(x-.75f*density,y-4.5f*density,x+.75f*density,y+4.5f*density,paint);
         }
         private void drawPlainThumb(Canvas canvas,float x,float y){

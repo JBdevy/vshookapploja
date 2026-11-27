@@ -1478,22 +1478,43 @@ void Engine::execute(const Command& c) {
     case CommandKind::queue:
         if (std::none_of(project_.songs.begin(), project_.songs.end(), [&](const auto& s) { return s.id == c.target; })) throw std::invalid_argument("Unknown queued song");
         transport_.queue.songId = c.target; break;
-    case CommandKind::queueBeatSeek: {
+    case CommandKind::queueBeatSeek:
+    case CommandKind::queueBarSeek:
+    case CommandKind::queueMarkerSeek:
+    case CommandKind::queuePartSeek: {
         const auto *song = currentSong();
         if (!song) break;
         if (!transport_.playing) { execute({CommandKind::editSeek, {}, c.value}); break; }
         const auto position = transport_.position;
         const auto destination = std::clamp(c.value, 0., song->duration);
+        transport_.editPosition = destination;
+        transport_.beatSeek.reset();
+        const auto looping = transport_.loop.enabled && transport_.loop.start && transport_.loop.end &&
+            *transport_.loop.end > position && !(transport_.multiLoop && !transport_.multiLoop->released);
+        if (c.kind == CommandKind::queueMarkerSeek || c.kind == CommandKind::queuePartSeek) {
+            const bool parts = c.kind == CommandKind::queuePartSeek;
+            std::optional<double> boundary;
+            if (song->markers) for (const auto &marker : *song->markers) {
+                if (marker.tempoBPM || marker.section.value_or(false) != parts || marker.unifiedRegionID ||
+                    marker.sourceRegionID || marker.position <= position || (looping && marker.position > *transport_.loop.end)) continue;
+                if (!boundary || marker.position < *boundary) boundary = marker.position;
+            }
+            if (boundary) {
+                transport_.beatSeek = BeatSeek{*boundary, destination};
+                cancelQueuedSection();
+            }
+            break;
+        }
+        const bool bar = c.kind == CommandKind::queueBarSeek;
         const auto tempo = pluginTempoMap(*song);
-        auto boundary = std::min(song->duration, tempo.nextBeatAfter(position));
-        if (transport_.loop.enabled && transport_.loop.start && transport_.loop.end &&
-            *transport_.loop.end > position && *transport_.loop.end < boundary &&
-            !(transport_.multiLoop && !transport_.multiLoop->released)) {
-            const auto firstBeat = tempo.nextBeatAfter(*transport_.loop.start - 1e-8);
+        auto boundary = std::min(song->duration, tempo.nextBeatAfter(position, bar));
+        if (bar && looping && *transport_.loop.end < boundary) {
+            boundary = *transport_.loop.end;
+        } else if (looping && *transport_.loop.end < boundary) {
+            const auto firstBeat = tempo.nextBeatAfter(*transport_.loop.start - 1e-8, bar);
             if (firstBeat <= *transport_.loop.start + 1e-9 || firstBeat > *transport_.loop.end)
                 boundary = *transport_.loop.end;
         }
-        transport_.editPosition = destination;
         transport_.beatSeek = BeatSeek{std::max(position, boundary), destination};
         cancelQueuedSection();
         break;

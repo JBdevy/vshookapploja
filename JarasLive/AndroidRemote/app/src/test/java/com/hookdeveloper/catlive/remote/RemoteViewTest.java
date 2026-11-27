@@ -139,7 +139,7 @@ public class RemoteViewTest {
  @Test public void manyTabsKeepReadableWidthAndScrollHorizontally()throws Exception{connect("director");JSONArray tabs=new JSONArray();for(int i=0;i<8;i++)tabs.put(new JSONObject().put("id","TAB"+i).put("name","Projeto "+i).put("selected",i==0));app.state.put("projectTabs",tabs);app.updateTabs();app.layoutProjectTabs(RemoteWidgets.dp(341));int total=0;for(int i=0;i<8;i++){assertTrue(app.tabs.getChildAt(i).getLayoutParams().width>=RemoteWidgets.dp(120));assertTrue(app.tabs.getChildAt(i).isLongClickable());total+=app.tabs.getChildAt(i).getLayoutParams().width;}assertTrue(total>RemoteWidgets.dp(341));assertSame(app.tabScroll,app.tabs.getParent());}
  @Test public void projectOpeningOverlaySurvivesWorkspaceReplacementAndOnlyReceiptFinishes()throws Exception{connect("director");JSONObject command=new JSONObject().put("id","COMMAND").put("action","openRecentProjectInNewTab");app.remote.projectOpening.begin(command,app.state,0);app.onLocalCommand(command);assertNotNull(app.root.findViewWithTag("project-loading"));assertTrue(app.root.findViewWithTag("project-loading").isClickable());app.buildWorkspace();app.tick();assertNotNull(app.root.findViewWithTag("project-loading"));app.state.put("projects",new JSONObject().put("commandID","COMMAND").put("commandState","completed"));app.remote.projectOpening.receive(app.state);app.tick();assertNull(app.root.findViewWithTag("project-loading"));}
  @Test public void changingPanelDoesNotRetainOldMixerViews()throws Exception{connect("director");app.choose("mixer");assertNotNull(app.trackColumn);app.choose("setlist");assertNull(app.trackColumn);app.choose("tp2");assertNotNull(app.tp);assertNull(app.setlistScroll);}
- @Test @Config(qualifiers="sw800dp-w800dp-h1280dp-port") public void tabletDirectorRequestsLandscapeAndKeepsTheMasterInTransport()throws Exception{
+ @Test @Config(qualifiers="sw800dp-w800dp-h1280dp-port") public void tabletDirectorRequestsLandscapeAndKeepsTheMasterInMixer()throws Exception{
   connect("director");assertTrue(RemoteWidgets.tablet);
   assertEquals(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE,app.getRequestedOrientation());
   Configuration landscape=new Configuration(app.getResources().getConfiguration());
@@ -150,10 +150,12 @@ public class RemoteViewTest {
   MainActivity.TrackRow master=app.trackRows.get("master");
   master.mute.performClick();assertTrue(app.state.optBoolean("masterMute"));
   master.mute.performClick();assertFalse(app.state.optBoolean("masterMute"));
-  LinearLayout display=(LinearLayout)((View)app.save.getParent()).getParent();
-  assertSame(app.current,display.getChildAt(1));
+  assertSame(master,((LinearLayout)app.mixerScroll.getParent()).getChildAt(0));
+  assertSame(app.current.getParent(),app.railButtons.get("menu").getParent());
+  LinearLayout transportPanel=(LinearLayout)((View)app.save.getParent()).getParent();
+  assertSame(transportPanel,((View)app.current.getParent()).getParent());
+  assertSame(transportPanel,app.transport.getChildAt(0));
   assertEquals("Abertura",app.current.getText().toString());
-  assertEquals(3,display.getChildCount());
   assertSame(app.fadeoutControl,((LinearLayout)app.play.getParent()).getChildAt(1));
   assertFalse(app.fadeoutControl.isEnabled());
   assertEquals(1,app.fadeoutControl.getAlpha(),0);
@@ -189,14 +191,21 @@ public class RemoteViewTest {
   app.choose("tp2");assertEquals("setlist",app.panel);assertNull(app.tp);assertNotNull(app.setlistScroll);assertNull(app.grid);
  }
 
- @Test @Config(qualifiers="sw800dp-w1280dp-h800dp-land") public void tabletToolbarIsAboveTransportWithPartsNextToMixer()throws Exception{
+ @Test @Config(qualifiers="sw800dp-w1280dp-h800dp-land") public void tabletToolbarIsBelowTransportWithLabeledPanelControls()throws Exception{
   connect("director");assertEquals(LinearLayout.HORIZONTAL,app.rail.getOrientation());
-  assertEquals(app.rail.indexOfChild(app.railButtons.get("mixer"))+1,app.rail.indexOfChild(app.railButtons.get("parts")));
-  View toolbar=(View)app.rail.getParent().getParent();assertSame(app.column,toolbar.getParent());
-  assertEquals(app.column.indexOfChild(toolbar)+1,app.column.indexOfChild(app.transport));
-  assertSame(toolbar,app.railButtons.get("settings").getParent());
+  assertSame(app.column,app.rail.getParent());
+  assertEquals(app.column.indexOfChild(app.transport)+1,app.column.indexOfChild(app.rail));
+  assertSame(app.railButtons.get("mixer"),app.rail.getChildAt(0));
+  assertSame(app.railButtons.get("parts"),app.rail.getChildAt(1));
+  assertSame(app.railButtons.get("vinhetas"),app.rail.getChildAt(2));
+  assertEquals("Track Mixer",app.railButtons.get("mixer").getText().toString());
+  assertEquals("Parts",app.railButtons.get("parts").getText().toString());
+  assertEquals("Pads",app.railButtons.get("vinhetas").getText().toString());
+  assertEquals("mixer",app.railButtons.get("mixer").leadingIcon);
+  assertSame(app.batteryBadge.getParent(),app.railButtons.get("settings").getParent());
+  assertSame(app.current.getParent(),((View)app.batteryBadge.getParent().getParent()).getParent());
   RemoteWidgets.Button preview=app.railButtons.get("preview");
-  assertEquals("preview",preview.icon);assertEquals("Preview",preview.getContentDescription());assertEquals("",preview.getText().toString());
+  assertEquals("preview",preview.leadingIcon);assertEquals("PRW",preview.getText().toString());
   app.state.put("previewActive",false);app.refresh();assertEquals(RemoteWidgets.RED,preview.tint);
   app.state.put("previewActive",true);app.refresh();assertEquals(RemoteWidgets.GREEN,preview.tint);
   app.choose("tp1");app.railButtons.get("mixer").performClick();assertEquals("grid",app.panel);assertTrue(app.mixerShown);

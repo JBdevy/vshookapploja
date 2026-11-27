@@ -795,6 +795,7 @@ struct MarkerEditAnchor: NSViewRepresentable {
     @objc func convertSelected() { convert() }
 }
 final class MarkerEditClickView: RightClickTargetView, NativeTimelineInputObserver {
+    var rename: (() -> Void)?
     func showMarkerMenu(edit: @escaping () -> Void, convert: @escaping () -> Void) {
         guard let event = NSApp.currentEvent, inputAvailable else { return }
         let actions = MarkerMenuActions(edit: edit, convert: convert)
@@ -895,6 +896,7 @@ final class MarkerEditClickView: RightClickTargetView, NativeTimelineInputObserv
         timelineInputGateChanged(blocked: true)
         guard inputAvailable,
               !event.modifierFlags.contains(.option), !event.modifierFlags.contains(.control) else { return }
+        if event.clickCount == 2, let rename { rename(); return }
         // Capture the original callback and window coordinates: moving the
         // display during preview must never change the gesture's origin.
         startX = event.locationInWindow.x

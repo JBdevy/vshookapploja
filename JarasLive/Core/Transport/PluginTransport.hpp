@@ -39,12 +39,12 @@ public:
         return {seconds, s.quarter + offset, s.point.bpm, s.point.beats, s.point.unit, playing,
                 s.quarter + std::floor(offset / bar + 1e-10) * bar};
     }
-    double nextBeatAfter(double seconds) const noexcept {
+    double nextBeatAfter(double seconds, bool bar = false) const noexcept {
         constexpr double epsilon = 1e-9;
         const auto next = std::upper_bound(sections.begin(), sections.end(), seconds + epsilon,
             [](double time, const Section &section) { return time < section.point.seconds; });
         const auto point = next == sections.begin() ? Point{} : (next - 1)->point;
-        const double beat = (60. / point.bpm) * (4. / point.unit);
+        const double beat = (60. / point.bpm) * (4. / point.unit) * (bar ? point.beats : 1);
         const double boundary = point.seconds + (std::floor((seconds - point.seconds + epsilon) / beat) + 1) * beat;
         return next == sections.end() ? boundary : std::min(boundary, next->point.seconds);
     }

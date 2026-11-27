@@ -4,9 +4,16 @@ import Combine
 import CoreText
 #if os(iOS)
 import GameController
+
+enum NativeFaderTouchPreference {
+    static let key = "jaras.ipad.fader.secondaryTouch"
+}
 #endif
 struct TimelineLockOptionsView: View {
     @ObservedObject var show: ShowController
+    #if os(iOS)
+    @AppStorage(NativeFaderTouchPreference.key) private var secondaryFaderTouch = true
+    #endif
     private func option(_ title: LocalizedStringKey, mask: Int) -> some View {
         Toggle(title, isOn: Binding(get: { show.timelineLockOptions & mask == mask }, set: { enabled in
             show.setTimelineLockOptions(enabled ? show.timelineLockOptions | mask : show.timelineLockOptions & ~mask)
@@ -18,6 +25,11 @@ struct TimelineLockOptionsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Bloqueios da grade").font(.headline)
+            Toggle("Lock", isOn: Binding(get: { show.timelineMovementLocked }, set: show.setTimelineMovementLocked))
+            #if os(macOS)
+            .toggleStyle(.checkbox)
+            #endif
+            Divider()
             option("Bloquear tudo", mask: TimelineLocks.all)
             Divider()
             option("Regiões e marcadores", mask: TimelineLocks.regions)
@@ -25,6 +37,17 @@ struct TimelineLockOptionsView: View {
             option("Volume dos itens", mask: TimelineLocks.itemVolume)
             option("Pan dos itens", mask: TimelineLocks.itemPan)
             option("Mute dos itens", mask: TimelineLocks.itemMute)
+            #if os(iOS)
+            Divider()
+            Button {
+                secondaryFaderTouch.toggle()
+            } label: {
+                Label("Fader with secondary touch",
+                      systemImage: secondaryFaderTouch ? "checkmark.square.fill" : "square")
+                    .foregroundStyle(JarasTheme.text)
+            }.buttonStyle(.plain)
+                .accessibilityAddTraits(secondaryFaderTouch ? .isSelected : [])
+            #endif
         }.padding(16).frame(width: 300)
     }
 }
@@ -363,7 +386,6 @@ private struct TimelineGridContent: View, Equatable {
     private let itemEditors: TimelineItemEditors
     @Environment(\.gridInteractionBlocked) private var gridInteractionBlocked
     @State private var cutGridItems: Set<UUID> = []
-    @State private var showingTimelineLocks = false
     @State private var zoomState = TimelineZoomState()
     @State private var hostedItemsGate = TimelineHostedItemsGate()
     @State private var rowLayoutCache = TrackLayoutCache()
@@ -748,7 +770,7 @@ private struct TimelineGridContent: View, Equatable {
                         if let index, originalSong.tracks[index].kind == .programChange { return false }
                         let track = index.map { originalSong.tracks[$0].id }
                         let start = itemPosition(location.x / pixelsPerSecond, song: song, pixelsPerSecond: pixelsPerSecond)
-                        return documents.importAudio(providers, start: start, track: track, song: originalSong.id)
+                        return documents.dropAtGrid(providers, start: start, track: track, song: originalSong.id)
                     }
                                 GridScrollView(axis: .horizontal, contentWidth: initialDocumentWidth, contentHeight: contentHeight, fileDrop: { urls, point in
                                     importDrop(urls.map { NSItemProvider(item: $0 as NSURL, typeIdentifier: UTType.fileURL.identifier) }, point)
@@ -759,12 +781,16 @@ private struct TimelineGridContent: View, Equatable {
                                     insertionPreview.update(itemPosition(point.x / pixelsPerSecond, song: song, pixelsPerSecond: pixelsPerSecond))
                                     let y = point.y - rulerHeight
                                     let index = rows.offsets.indices.first { y >= rows.offsets[$0] && y < rows.offsets[$0] + rows.heights[$0] }
-                                    let track = index.map { song.tracks[$0] }
                                     let endY = rulerHeight + rows.totalHeight
-                                    insertionPreview.targetExternal(.init(y: index.map { rulerHeight + rows.offsets[$0] } ?? endY,
-                                        height: index.map { rows.laneHeights[$0] } ?? row,
-                                        color: track?.color ?? Track.defaultStandardColor,
-                                        newTracksY: track == nil ? endY + row : endY, newTrackHeight: row))
+                                    let positions = index.map {
+                                        StemProjectImporter.gridDropRows(in: originalSong.tracks, startingAt: $0, limit: urls.count)
+                                    } ?? []
+                                    let tracks = positions.map { index in
+                                        GridInsertionPreview.ExternalRow(y: rulerHeight + rows.offsets[index],
+                                            height: rows.laneHeights[index],
+                                            color: originalSong.tracks[index].color ?? Track.defaultStandardColor)
+                                    }
+                                    insertionPreview.targetExternal(.init(rows: tracks, newTracksY: endY, newTrackHeight: row))
                                 }) {
                                 TimelineCoordinatePlaneLayer(state: zoomState, extent: extent) { layoutWidth in
                                     ZStack(alignment: .topLeading) {
@@ -1045,20 +1071,6 @@ private struct TimelineGridContent: View, Equatable {
                                                 .disabled(movingRegion != nil)
                                         }
                                         #endif
-                                        Button { show.setTimelineMovementLocked(!show.timelineMovementLocked) } label: {
-                                            ControlIcon(name: show.timelineMovementLocked ? "lock" : "unlock", active: show.timelineMovementLocked)
-                                        }
-                                        .buttonStyle(TimelineMovementLockButtonStyle(locked: show.timelineMovementLocked))
-                                        .accessibilityLabel("Lock timeline movement")
-                                        .accessibilityIdentifier("timeline-movement-lock")
-                                        #if os(macOS)
-                                        .immediateRightClick { showingTimelineLocks = true }
-                                        #endif
-                                        .popover(isPresented: $showingTimelineLocks, arrowEdge: .top) {
-                                            TimelineLockOptionsView(show: show)
-                                        }
-                                        .accessibilityValue(show.timelineMovementLocked ? "Locked" : "Unlocked")
-                                        .help(Text(verbatim: "Lock- Timeline"))
                                         Button { addingTrack = true } label: {
                                             Text(verbatim: "Add").font(.jarasSystem(size: 10, weight: .semibold))
                                                 .foregroundStyle(JarasTheme.accent).frame(width: 32, height: 24)
@@ -1491,6 +1503,10 @@ private struct TimelineGridContent: View, Equatable {
                 rulerSections: snapRulerSections(for: originalSong),
                 parentIDs: metadata.regionParentIDs, regionTargets: regionTargets,
                 edit: { marker in if marker.isTempo { editingTempoMarker = marker } else { editingMarker = marker } },
+                rename: { id, name, region in
+                    guard show.current?.id == originalSong.id else { return }
+                    show.renameTimelineLabel(id, name: name, region: region, includesParts: true)
+                },
                 delete: { show.deleteManualMarker($0) }, convert: { show.modalNotice = show.convertMarkersToRegions(markerID: $0) }, seek: {
                     show.send(.editSeek, value: $0.position)
                 }, move: {
@@ -1553,8 +1569,7 @@ private struct TimelineGridContent: View, Equatable {
                       let current = show.current, selected.song == song.id else { return }
                 selectionTempoRequest = SelectionTempoRequest(selection: selected, song: current, documents: documents)
             }, rulerSeek: { fraction, free in
-                let editMode = TimelineEditPreferences.enabled(TimelineEditPreferences.desktop)
-                show.send(editMode ? .queueBeatSeek : .editSeek,
+                show.send(TimelineEditPreferences.seekCommand(TimelineEditPreferences.desktop),
                     value: gridPosition(fraction * extent, song: song, pixelsPerSecond: controller.pixelsPerSecond, freePositioning: free))
             }, needleSeek: { position, secondary in
                 guard let current = show.current else { return }
@@ -2894,6 +2909,8 @@ private struct TimelineGridContent: View, Equatable {
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
+        fills.deferOpeningUntilVisible()
+        waveforms.deferOpeningUntilVisible()
         addSubview(fills); addSubview(waveforms); addSubview(bodyInk)
         waveforms.didPresent = { [weak self] frame in
             guard let self, let configuration = self.configuration,
@@ -3057,17 +3074,18 @@ private struct TimelineGridContent: View, Equatable {
                             seams: seamPositions.map { CGFloat($0 * scale - tile.minX) }))
                     }
                 } else if rect.height > 26, let file = clip.audioFile ?? track.audioFile {
-                    let luminance = 0.2126 * rgb.x + 0.7152 * rgb.y + 0.0722 * rgb.z
                     let gray = TimelineItemWaveformColors.normalGray
                     if prepared.waveform == nil {
                         guard let mediaSource = mediaURLs.resolveClipSource(clip.id, path: file.path) else { continue }
                         prepared.waveform = TimelineWaveformItem(clip: clip, fragments: fragments,
-                            url: mediaSource.url, rect: rect, gray: gray, sourcePath: mediaSource.path, mediaSource: mediaSource,
-                            tint: inverted ? TimelineItemWaveformColors.ink(rgb: rgb, silenced: silenced) : nil)
+                            url: mediaSource.url, rect: rect, gray: gray, sourcePath: mediaSource.path, mediaSource: mediaSource)
                         preparedItems[clip.id] = prepared
                     }
                     if var waveform = prepared.waveform {
                         waveform.rect = rect
+                        waveform.tint = TimelineItemWaveformColors.stackedInk(rgb: rgb,
+                            inverted: value.contentKey.invertWaveformColors, silenced: silenced,
+                            depth: value.rows.lanes[index].stackDepth(for: clip.id))
                         visibleWaveforms.append(waveform)
                     }
                 }
@@ -3190,6 +3208,60 @@ private struct TimelineGridContent: View, Equatable {
 
 /// The closed header owns no SwiftUI zoom graph. Text is rasterized only when
 /// its displayed string/backing scale changes; projection never stretches it.
+@MainActor private final class TimelineHeaderNameField: NSTextField, NSTextFieldDelegate {
+    private var save: ((String) -> Void)?
+    private var clicks: Any?
+
+    init(name: String, save: @escaping (String) -> Void) {
+        self.save = save
+        super.init(frame: .zero)
+        stringValue = name
+        isEditable = true
+        isSelectable = true
+        isBezeled = true
+        drawsBackground = true
+        backgroundColor = NSColor(JarasTheme.display)
+        textColor = NSColor(JarasTheme.text)
+        font = NSFont.jarasSystemFont(ofSize: 11, weight: .semibold)
+        delegate = self
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func begin(in window: NSWindow) {
+        window.makeFirstResponder(self)
+        selectText(nil)
+        clicks = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            if let self, event.window !== self.window || !self.bounds.contains(self.convert(event.locationInWindow, from: nil)) {
+                self.finish(commit: true)
+            }
+            return event
+        }
+    }
+
+    func finish(commit: Bool) {
+        guard let save else { return }
+        self.save = nil
+        let value = (currentEditor() as? NSTextView)?.string ?? stringValue
+        if let clicks { NSEvent.removeMonitor(clicks); self.clicks = nil }
+        window?.endEditing(for: self)
+        removeFromSuperview()
+        if commit { save(value) }
+    }
+
+    func controlTextDidEndEditing(_ notification: Notification) { finish(commit: true) }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        if selector == #selector(NSResponder.cancelOperation(_:)) { finish(commit: false); return true }
+        if selector == #selector(NSResponder.insertNewline(_:)) { finish(commit: true); return true }
+        return false
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil, let clicks { NSEvent.removeMonitor(clicks); self.clicks = nil }
+        super.viewWillMove(toWindow: newWindow)
+    }
+}
+
 @MainActor private struct NativeTimelineHeaderConfiguration {
     let song: Song
     let lanes: RegionLanes
@@ -3197,6 +3269,7 @@ private struct TimelineGridContent: View, Equatable {
     let parentIDs: Set<UUID>
     let regionTargets: [NativeTimelineRegionTarget]
     let edit: (TimelineMarker) -> Void
+    let rename: (UUID, String, Bool) -> Void
     let delete: (UUID) -> Void
     var convert: ((UUID) -> Void)? = nil
     let seek: (TimelineMarker) -> Void
@@ -3472,6 +3545,10 @@ private final class NativeTimelineHeaderText: NSObject {
     private var markerLayerOrder: [UUID] = []
     private var boundaryLayerOrder: [UUID] = []
     private let regionsInput = NativeTimelineRegionTargetsView()
+    private weak var nameField: TimelineHeaderNameField?
+    func regionTargetContains(windowPoint: NSPoint) -> Bool {
+        regionsInput.containsRegionTarget(windowPoint: windowPoint)
+    }
     private var displayColor = NSColor(JarasTheme.display).cgColor
     private var lineColor = NSColor(JarasTheme.line).cgColor
     private let linkedOutlineColor = NSColor(JarasTheme.yellow).cgColor
@@ -3530,9 +3607,26 @@ private final class NativeTimelineHeaderText: NSObject {
         let hit = super.hitTest(point)
         return hit === self ? nil : hit
     }
+    private var nameClickMonitor: Any?
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window != nil { NativeTimelineInputGate.shared.add(self) }
+        if let nameClickMonitor { NSEvent.removeMonitor(nameClickMonitor); self.nameClickMonitor = nil }
+        guard window != nil else { return }
+        NativeTimelineInputGate.shared.add(self)
+        nameClickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+            guard let self, event.clickCount == 2, event.window === self.window,
+                  event.modifierFlags.intersection([.option, .control, .shift, .command]).isEmpty,
+                  !NativeTimelineInputGate.shared.isBlocked(self.window), self.window?.attachedSheet == nil,
+                  !self.isHiddenOrHasHiddenAncestor else { return event }
+            let point = self.convert(event.locationInWindow, from: nil)
+            guard self.visibleRect.contains(point), self.nameField?.frame.contains(point) != true else { return event }
+            if let id = self.inputOrder.reversed().first(where: { self.markerInputs[$0]?.clickBounds.contains(point) == true }),
+               let rename = self.markerInputs[id]?.rename {
+                DispatchQueue.main.async(execute: rename)
+                return nil
+            }
+            return event
+        }
     }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -3606,6 +3700,7 @@ private final class NativeTimelineHeaderText: NSObject {
             return false
         }
         configuredLanguage = language
+        if configuration?.song.id != value?.song.id { nameField?.finish(commit: false) }
         if value?.movementLocked == true || configuration?.song.id != value?.song.id || !(value?.song.markers ?? []).contains(where: { $0.id == preview?.id }) {
             preview = nil
         }
@@ -3804,6 +3899,7 @@ private final class NativeTimelineHeaderText: NSObject {
                 markerInputs[id].map { (ObjectIdentifier($0), index + 1) }
             })
             order[ObjectIdentifier(regionsInput)] = 0
+            if let nameField { order[ObjectIdentifier(nameField)] = ids.count + 1 }
             withUnsafeMutablePointer(to: &order) { pointer in
                 sortSubviews({ left, right, context in
                     let order = context!.assumingMemoryBound(to: [ObjectIdentifier: Int].self).pointee
@@ -3830,6 +3926,12 @@ private final class NativeTimelineHeaderText: NSObject {
             if marker.unifiedRegionID == nil, marker.sourceRegionID == nil { value.delete(marker.id) }
         }
         view.normalCursor = !marker.isTempo && marker.sourceRegionID == nil && marker.unifiedRegionID == nil
+        if view.normalCursor {
+            view.rename = { [weak self, weak view] in
+                guard let self, let view else { return }
+                self.beginRename(marker.id, name: marker.name, region: false, at: view.convert(view.clickBounds, to: self))
+            }
+        } else { view.rename = nil }
         view.seek = { value.seek(marker) }
         view.drag = !value.movementLocked && value.song.canDragMarker(marker) ? { [weak self, weak view] delta, ended in
             guard let self, self.configuration?.movementLocked != true else { return }
@@ -3843,6 +3945,19 @@ private final class NativeTimelineHeaderText: NSObject {
             else { self.preview = moved }
             self.prepareMarkers(); self.reproject()
         } : nil
+    }
+    private func beginRename(_ id: UUID, name: String, region: Bool, at frame: CGRect) {
+        guard let configuration, let window else { return }
+        nameField?.finish(commit: true)
+        let visible = visibleRect.intersection(bounds)
+        guard !visible.isEmpty else { return }
+        let width = min(visible.width, max(128, min(360, frame.width)))
+        let left = min(max(visible.minX, frame.minX), visible.maxX - width)
+        let field = TimelineHeaderNameField(name: name) { value in configuration.rename(id, value, region) }
+        field.frame = CGRect(x: left, y: frame.midY - 10, width: width, height: 20)
+        addSubview(field, positioned: .above, relativeTo: nil)
+        nameField = field
+        field.begin(in: window)
     }
     private func updateDrawingLayers() {
         // Join the existing frame transaction, just like the native ruler.
@@ -4067,6 +4182,11 @@ private final class NativeTimelineHeaderText: NSObject {
         if id != hoveredID { clearProjectedPointer(); hoveredID = id }
         if let id { mounted[id]?.view.updateProjectedPointer(at: point) }
     }
+    func containsRegionTarget(windowPoint: NSPoint) -> Bool {
+        let point = convert(windowPoint, from: nil)
+        guard cursorBand.intersection(bounds).intersection(visibleRect).contains(point) else { return false }
+        return mountedOrder.contains { mounted[$0]?.view.projectedInputBounds.contains(point) == true }
+    }
     override func mouseMoved(with event: NSEvent) { refreshProjectedPointer(event) }
     override func mouseEntered(with event: NSEvent) { refreshProjectedPointer(event) }
     override func cursorUpdate(with event: NSEvent) { refreshProjectedPointer(event) }
@@ -4281,6 +4401,7 @@ private final class NativeTimelineBaseMountView: NSView {
     weak var controller: NativeTimelineBaseController?
     var headerInteractionHeight: CGFloat = 0
     var headerInteraction: (() -> Void)? { didSet { updateHeaderClickMonitor() } }
+    var regionSelectionInteraction: ((NSPoint) -> Void)?
     private var headerClickMonitor: Any?
     override var isFlipped: Bool { true }
     override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric) }
@@ -4316,6 +4437,7 @@ private final class NativeTimelineBaseMountView: NSView {
         guard event.type == .leftMouseDown, let window, event.window === window,
               window.attachedSheet == nil, !isHiddenOrHasHiddenAncestor,
               !NativeTimelineInputGate.shared.isBlocked(window) else { return }
+        regionSelectionInteraction?(event.locationInWindow)
         let point = convert(event.locationInWindow, from: nil)
         guard point.y >= bounds.minY, point.y < bounds.minY + headerInteractionHeight,
               visibleRect.contains(point) else { return }
@@ -4533,6 +4655,11 @@ private final class NativeTimelineBaseMountView: NSView {
         guard let configuration, let rulerMount else { return }
         rulerMount.headerInteractionHeight = configuration.headerBands.regionLaneHeight
         rulerMount.headerInteraction = { [weak show = configuration.show] in show?.pauseTimelineFollow() }
+        rulerMount.regionSelectionInteraction = { [weak self, weak show = configuration.show] point in
+            guard let self, let show, !show.selectedTimelineRegions.isEmpty,
+                  !self.header.regionTargetContains(windowPoint: point) else { return }
+            show.clearTimelineRegionSelection()
+        }
     }
     func setToolbarZoom(_ zoom: Double) {
         guard let configuration, let clip = horizontal, let grid = clip.superview as? GridNativeScrollView,
@@ -4614,6 +4741,7 @@ private final class NativeTimelineBaseMountView: NSView {
             self.configuration = nil; self.style = nil
             self.selection.recordingHeaders = []
             self.rulerMount?.headerInteraction = nil
+            self.rulerMount?.regionSelectionInteraction = nil
             self.documentSize.hostedProjectionDidLayout = nil
             (self.horizontal?.superview as? GridNativeScrollView)?.prepareHostedHorizontalScroll = nil
             (self.vertical?.superview as? GridNativeScrollView)?.prepareHostedVerticalScroll = nil
@@ -5950,13 +6078,13 @@ private struct TimelineMetalWaveformLayer: View {
                       !missingAudioPaths.contains(file.path) else { continue }
                 let silenced = metadata.isSilenced(track) || clip.muted == true
                 let rgb = TrackNameContrast.components(track.color ?? JarasTheme.roleHex(track.role), emphasized: selectedClips.contains(clip.id))
-                let luminance = 0.2126 * rgb.red + 0.7152 * rgb.green + 0.0722 * rgb.blue
                 let gray = TimelineItemWaveformColors.normalGray
                 let mediaSource = mediaURLs.resolveSource(file.path, directory: mediaDirectory)
                 let waveform = TimelineWaveformItem(clip: clip,
                     fragments: metadata.fragments(for: clip, preview: preview != nil),
                     url: mediaSource.url, rect: rect, gray: gray, sourcePath: mediaSource.path, mediaSource: mediaSource,
-                    tint: invertWaveformColors ? TimelineItemWaveformColors.ink(rgb: SIMD4(Float(rgb.red), Float(rgb.green), Float(rgb.blue), 1), silenced: silenced) : nil)
+                    tint: TimelineItemWaveformColors.stackedInk(rgb: SIMD4(Float(rgb.red), Float(rgb.green), Float(rgb.blue), 1),
+                        inverted: invertWaveformColors, silenced: silenced, depth: rows.lanes[index].stackDepth(for: clip.id)))
                 items.append(waveform)
             }
         }
@@ -6674,7 +6802,8 @@ private func drawTimelineItem(_ clip: AudioClip, track: Track, title: String, re
     #if !os(macOS)
     if stackedOverlap {
         let band = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: min(GridSelectionItem.headerHeight, rect.height))
-        titleContext.fill(Path(band), with: .color(Color(hex: GridSelectionItem.stackedHeaderColor)))
+        let headerColor = selected ? Color(white: GridSelectionItem.selectedHeaderWhite) : Color(hex: GridSelectionItem.stackedHeaderColor)
+        titleContext.fill(Path(band), with: .color(headerColor))
     }
     let controls = GridSelectionItem(id: clip.id, rect: rect, gain: clip.gain ?? 1, phaseInverted: clip.phaseInverted == true, pan: clip.pan ?? 0, editable: track.kind == .standard || clip.isProjectionMedia, textEditable: track.kind.isText && !clip.isProjectionMedia)
     #if os(macOS)
@@ -8239,17 +8368,55 @@ private struct ClipDragInput: View {
 }
 #endif
 
-private struct TimelineMovementLockButtonStyle: ButtonStyle {
-    let locked: Bool
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.jarasSystem(size: 10, weight: .semibold))
-            .foregroundStyle(locked ? Color.black : JarasTheme.text)
-            .frame(width: 24, height: 21)
-            .background(locked ? JarasTheme.yellow.opacity(configuration.isPressed ? 0.75 : 1)
-                : JarasTheme.text.opacity(configuration.isPressed ? 0.24 : 0.12))
-            .clipShape(RoundedRectangle(cornerRadius: 3))
-            .contentShape(Rectangle())
+struct TimelineLockSelector: View {
+    let show: ShowController
+    let height: CGFloat
+    @Environment(\.desktopEditingStripDensity) private var density
+    private var showsTitle: Bool { density.showsLockTitle }
+    @ObservedObject private var updates: ShowProjectPresentation
+    @State private var showingOptions = false
+
+    init(show: ShowController, height: CGFloat = TimelineEditingBarMetrics.controlHeight) {
+        self.show = show
+        self.height = height
+        _updates = ObservedObject(wrappedValue: show.projectPresentation)
+    }
+
+    var body: some View {
+        let locked = show.timelineMovementLocked
+        HStack(spacing: 0) {
+            Button { show.setTimelineMovementLocked(!locked) } label: {
+                HStack(spacing: 5) {
+                    ControlIcon(name: locked ? "lock" : "unlock", active: false, size: 16, tintable: true)
+                    if showsTitle {
+                        Text(verbatim: "Lock")
+                            .font(.jarasSystem(size: TimelineEditingBarMetrics.labelSize, weight: .semibold))
+                    }
+                }.frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
+            }.buttonStyle(.plain)
+                .accessibilityLabel("Lock")
+                .accessibilityIdentifier("timeline-movement-lock")
+                .accessibilityValue(locked ? "Locked" : "Unlocked")
+                .accessibilityAddTraits(locked ? .isSelected : [])
+            Button { showingOptions.toggle() } label: {
+                Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
+                    .frame(width: 18, height: height).contentShape(Rectangle())
+            }.buttonStyle(.plain)
+                .accessibilityLabel("Lock options")
+                .popover(isPresented: $showingOptions) {
+                    let options = TimelineLockOptionsView(show: show)
+                    #if os(iOS)
+                    if #available(iOS 16.4, *) { options.presentationCompactAdaptation(.popover) }
+                    else { options }
+                    #else
+                    options
+                    #endif
+                }
+        }
+        .foregroundStyle(locked ? Color.black : JarasTheme.text)
+        .frame(width: showsTitle ? 74 : 42, height: height)
+        .background(locked ? JarasTheme.yellow : Color(hex: 0x454545), in: RoundedRectangle(cornerRadius: 6))
+        .onChange(of: show.snapshot.project.id) { _ in showingOptions = false }
     }
 }
 
