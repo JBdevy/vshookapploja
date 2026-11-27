@@ -1503,17 +1503,17 @@ private struct TrackMixFeedbackPanel: View {
         !prompterFullscreen && (prompterPanel == nil ? setlistFraction > 0 : prompterSetlistFraction > 0)
     }
     private func setNativeFocus(open: Bool) {
-        nativeFocusOpen = open
+        if nativeFocusOpen != open { nativeFocusOpen = open }
         guard open else { return }
-        if !horizontalPartsOpen { nativeLeftPartsOpen = false }
+        if !horizontalPartsOpen && nativeLeftPartsOpen { nativeLeftPartsOpen = false }
         if nativeVideoDocked {
-            nativeLibraryOpen = false
-            mixerHidden = true
+            if nativeLibraryOpen { nativeLibraryOpen = false }
+            if !mixerHidden { mixerHidden = true }
         }
     }
     private func setNativeLibrary(open: Bool) {
-        nativeLibraryOpen = open
-        if open && nativeVideoDocked { nativeFocusOpen = false }
+        if nativeLibraryOpen != open { nativeLibraryOpen = open }
+        if open && nativeVideoDocked && nativeFocusOpen { nativeFocusOpen = false }
     }
     private func setNativeVideoDocked(_ docked: Bool) {
         nativeVideoDocked = docked
