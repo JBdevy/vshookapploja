@@ -1,4 +1,11 @@
 plugins { id 'com.android.application' }
+
+configurations {
+    robolectricSdk {
+        canBeConsumed = false
+        transitive = false
+    }
+}
 android {
     namespace 'com.hookdeveloper.catlive.remote'
     compileSdk 36
@@ -14,12 +21,23 @@ android {
     buildFeatures { buildConfig true }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
     buildTypes { release { minifyEnabled true; shrinkResources true; proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro' } }
-    testOptions { unitTests.includeAndroidResources = true }
+    testOptions {
+        unitTests.includeAndroidResources = true
+        unitTests.all { test ->
+            // Gradle resolves the instrumented API 31 used by the Remote fixtures once.
+            test.inputs.files(configurations.robolectricSdk)
+            test.doFirst {
+                test.systemProperty 'robolectric.dependency.dir', configurations.robolectricSdk.singleFile.parent
+            }
+            test.testLogging.exceptionFormat = 'full'
+        }
+    }
     packaging { resources { excludes += ['META-INF/versions/**', 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA'] } }
 }
 dependencies {
     implementation 'org.bouncycastle:bcprov-jdk18on:1.86'
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.robolectric:robolectric:4.15.1'
+    robolectricSdk 'org.robolectric:android-all-instrumented:12-robolectric-7732740-i7@jar'
     testImplementation 'org.json:json:20240303'
 }
