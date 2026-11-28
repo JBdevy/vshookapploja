@@ -247,6 +247,16 @@ struct ImportAudit: Decodable {
     var songs: [Region]; var tracks: [Channel]; var groups: [Group]
 }
 
+enum GridMediaFileFilter {
+    static func accepts(_ url: URL) -> Bool {
+        guard url.isFileURL, !url.hasDirectoryPath else { return false }
+        let ext = url.pathExtension.lowercased()
+        if ["jllyrics", "mid", "midi"].contains(ext) { return true }
+        guard let type = UTType(filenameExtension: ext) else { return false }
+        return type.conforms(to: .audio) || type.conforms(to: .movie) || type.conforms(to: .image)
+    }
+}
+
 /// Runs on a worker task. Audio is read in bounded buffers, never on the UI or audio thread.
 enum AudioDropLayout: String, CaseIterable, Sendable { case separateTracks, sameTrack, stacked }
 
@@ -263,31 +273,78 @@ enum StemProjectImporter {
         return rows
     }
 
+    static func readMIDIItem(_ url: URL, start: Double) throws -> AudioClip {
+        let unreadable = ProjectError.invalid("Could not read the MIDI file.")
+        var source: MusicSequence?
+        guard NewMusicSequence(&source) == noErr, let source else { throw unreadable }
+        defer { DisposeMusicSequence(source) }
+        guard MusicSequenceFileLoad(source, url as CFURL, .midiType, []) == noErr else { throw unreadable }
+        var count: UInt32 = 0
+        MusicSequenceGetTrackCount(source, &count)
+        var notes: [MIDINote] = [], duration = 0.0
+        for index in 0..<count {
+            var track: MusicTrack?
+            var iterator: MusicEventIterator?
+            guard MusicSequenceGetIndTrack(source, index, &track) == noErr, let track,
+                  NewMusicEventIterator(track, &iterator) == noErr, let iterator else { continue }
+            defer { DisposeMusicEventIterator(iterator) }
+            var hasEvent = DarwinBoolean(false)
+            while MusicEventIteratorHasCurrentEvent(iterator, &hasEvent) == noErr, hasEvent.boolValue {
+                var beat: MusicTimeStamp = 0, kind: MusicEventType = 0, size: UInt32 = 0
+                var data: UnsafeRawPointer?
+                MusicEventIteratorGetEventInfo(iterator, &beat, &kind, &data, &size)
+                if kind == kMusicEventType_MIDINoteMessage, let data, size >= MemoryLayout<MIDINoteMessage>.size {
+                    let note = data.load(as: MIDINoteMessage.self)
+                    var begin = 0.0, end = 0.0
+                    if note.velocity > 0, MusicSequenceGetSecondsForBeats(source, beat, &begin) == noErr,
+                       MusicSequenceGetSecondsForBeats(source, beat + Double(note.duration), &end) == noErr,
+                       begin.isFinite, end.isFinite, begin >= 0, end > begin {
+                        notes.append(.init(start: begin * 2, length: (end - begin) * 2, pitch: Int(note.note),
+                                           velocity: Int(note.velocity), channel: Int(note.channel) + 1))
+                        duration = max(duration, end)
+                    }
+                }
+                MusicEventIteratorNextEvent(iterator)
+            }
+        }
+        guard !notes.isEmpty else { throw ProjectError.invalid("The MIDI file contains no notes.") }
+        var item = AudioClip(id: UUID(), name: url.deletingPathExtension().lastPathComponent, startTime: start, duration: duration)
+        item.midi = MIDIItem(notes: notes)
+        return item
+    }
+
     private struct DroppedSource {
         let url: URL
         let kind: TrackKind
         let duration: Double
+        var midi: MIDIItem? = nil
     }
     private static func droppedSources(_ urls: [URL]) throws -> [DroppedSource] {
         var seen = Set<URL>(), sources: [DroppedSource] = []
         for url in urls {
             try Task.checkCancellation()
             guard seen.insert(url.standardizedFileURL).inserted else { continue }
-            guard url.isFileURL else { throw ProjectError.invalid("Could not read the dropped file.") }
+            guard url.isFileURL else { continue }
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
             let values = try url.resourceValues(forKeys: [.isRegularFileKey, .contentTypeKey])
-            guard values.isRegularFile == true else { throw ProjectError.invalid("Select media files, not folders.") }
+            guard values.isRegularFile == true else { continue }
             let type = values.contentType ?? UTType(filenameExtension: url.pathExtension)
+            if ["mid", "midi"].contains(url.pathExtension.lowercased()) {
+                if let item = try? readMIDIItem(url, start: 0) {
+                    sources.append(DroppedSource(url: url, kind: .standard, duration: item.duration, midi: item.midi))
+                }
+                continue
+            }
             let knownAudio = ["wav", "wave", "aif", "aiff", "mp3", "m4a", "aac", "caf", "flac"].contains(url.pathExtension.lowercased())
             let image = type?.conforms(to: .image) == true
             guard knownAudio || image || type?.conforms(to: .audio) == true || type?.conforms(to: .movie) == true else {
-                throw ProjectError.invalid("Unsupported media file: " + url.lastPathComponent)
+                continue
             }
             if image {
                 guard let source = CGImageSourceCreateWithURL(url as CFURL, nil), CGImageSourceGetCount(source) > 0,
                       CGImageSourceCopyPropertiesAtIndex(source, 0, nil) != nil else {
-                    throw ProjectError.invalid("Unsupported media file: " + url.lastPathComponent)
+                    continue
                 }
                 sources.append(DroppedSource(url: url, kind: .video, duration: 10))
                 continue
@@ -297,10 +354,11 @@ enum StemProjectImporter {
             let duration: Double
             if video { duration = asset.duration.seconds }
             else {
-                let audio = try AVAudioFile(forReading: url)
+                guard FileManager.default.isReadableFile(atPath: url.path) else { throw CocoaError(.fileReadNoPermission) }
+                guard let audio = try? AVAudioFile(forReading: url) else { continue }
                 duration = Double(audio.length) / audio.processingFormat.sampleRate
             }
-            guard duration.isFinite, duration > 0 else { throw ProjectError.invalid("Empty media file: " + url.lastPathComponent) }
+            guard duration.isFinite, duration > 0 else { continue }
             sources.append(DroppedSource(url: url, kind: video ? .video : .standard, duration: duration))
         }
         return sources
@@ -311,9 +369,8 @@ enum StemProjectImporter {
         guard destinationKind != .programChange else { throw ProjectError.invalid("Program Change tracks accept only program markers") }
         // Validate the entire batch before making any project directory or copying media.
         let sources = try droppedSources(urls)
-        guard let kind = sources.first?.kind else { throw ProjectError.invalid("No media files to import") }
-        guard sources.allSatisfy({ $0.kind == kind }) else { throw ProjectError.invalid("Drop audio and video separately") }
-        if kind != .video || layout == .stacked {
+        guard !sources.isEmpty else { return DroppedAudio(tracks: [], folders: []) }
+        if sources.contains(where: { $0.kind != .video }) || layout == .stacked {
             guard destinationKind == nil || destinationKind == .standard else { throw ProjectError.invalid("Audio files must be dropped on a standard audio track") }
         }
         let fm = FileManager.default
@@ -332,27 +389,34 @@ enum StemProjectImporter {
                 let scoped = url.startAccessingSecurityScopedResource()
                 defer { if scoped { url.stopAccessingSecurityScopedResource() } }
                 progress?(index, sources.count, url.lastPathComponent)
-                let existing = try (isVideo ? videoMedia : audioMedia).identical(to: url)
-                let copied: URL
-                if let existing {
-                    copied = existing
-                } else {
-                    let name = isVideo ? videoNames.allocate(url.lastPathComponent) : audioNames.allocate(url.lastPathComponent)
-                    let folder = projectDirectory.appendingPathComponent((isVideo ? "Videos" : "Stems"), isDirectory: true)
-                    try fm.createDirectory(at: folder, withIntermediateDirectories: true)
-                    copied = folder.appendingPathComponent(name)
-                    try fm.copyItem(at: url, to: copied); folders.append(copied)
-                    if isVideo { try videoMedia.register(copied) } else { try audioMedia.register(copied) }
-                }
-                let basePath = (projectDirectory.path as NSString).resolvingSymlinksInPath
-                let copiedPath = (copied.path as NSString).resolvingSymlinksInPath
-                guard copiedPath.hasPrefix(basePath + "/") else { throw ProjectError.invalid("Imported media must stay inside the project folder") }
-                let mediaPath = String(copiedPath.dropFirst(basePath.count + 1))
-                if isVideo && !AVURLAsset(url: copied).tracks(withMediaType: .audio).isEmpty { _ = try AudioFileRead.openMedia(copied) }
-                let overview = (isVideo || deferWaveform) ? (waveform: [Double](), peak: 0.0, channels: [[Double]]()) : try audioOverview(copied, duration: source.duration)
                 let itemName = url.deletingPathExtension().lastPathComponent
-                let clip = AudioClip(id: UUID(), name: itemName, startTime: layout == .sameTrack ? cursor : start, duration: source.duration,
-                                     waveform: overview.waveform, audioFile: AudioFile(path: mediaPath), waveformChannels: overview.channels)
+                let itemStart = layout == .sameTrack ? cursor : start
+                var clip: AudioClip
+                if let midi = source.midi {
+                    clip = AudioClip(id: UUID(), name: itemName, startTime: itemStart, duration: source.duration)
+                    clip.midi = midi
+                } else {
+                    let existing = try (isVideo ? videoMedia : audioMedia).identical(to: url)
+                    let copied: URL
+                    if let existing {
+                        copied = existing
+                    } else {
+                        let name = isVideo ? videoNames.allocate(url.lastPathComponent) : audioNames.allocate(url.lastPathComponent)
+                        let folder = projectDirectory.appendingPathComponent((isVideo ? "Videos" : "Stems"), isDirectory: true)
+                        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+                        copied = folder.appendingPathComponent(name)
+                        try fm.copyItem(at: url, to: copied); folders.append(copied)
+                        if isVideo { try videoMedia.register(copied) } else { try audioMedia.register(copied) }
+                    }
+                    let basePath = (projectDirectory.path as NSString).resolvingSymlinksInPath
+                    let copiedPath = (copied.path as NSString).resolvingSymlinksInPath
+                    guard copiedPath.hasPrefix(basePath + "/") else { throw ProjectError.invalid("Imported media must stay inside the project folder") }
+                    let mediaPath = String(copiedPath.dropFirst(basePath.count + 1))
+                    if isVideo && !AVURLAsset(url: copied).tracks(withMediaType: .audio).isEmpty { _ = try AudioFileRead.openMedia(copied) }
+                    let overview = (isVideo || deferWaveform) ? (waveform: [Double](), peak: 0.0, channels: [[Double]]()) : try audioOverview(copied, duration: source.duration)
+                    clip = AudioClip(id: UUID(), name: itemName, startTime: itemStart, duration: source.duration,
+                                         waveform: overview.waveform, audioFile: AudioFile(path: mediaPath), waveformChannels: overview.channels)
+                }
                 if layout != .separateTracks, !tracks.isEmpty { tracks[0].clips.append(clip) }
                 else {
                     let trackID = tracks.count < destinationTracks.count ? destinationTracks[tracks.count] : UUID()
@@ -531,9 +595,11 @@ enum StemProjectImporter {
     }
     /// Enrich older imported items once; the saved overview avoids decoding on redraw.
     public static func populateChannelOverviews(_ source: Project, directory: URL,
+                                                externalOverviewIsCurrent: ((URL) -> Bool)? = nil,
                                                 onUnreadable: ((String, Error) -> Void)? = nil) throws -> Project {
         var project = source
         var cache: [String: [[Double]]] = [:]
+        var externalOverviews: [String: Bool] = [:]
         var unreadable = Set<String>()
         for song in project.songs.indices {
             for track in project.songs[song].tracks.indices {
@@ -543,8 +609,19 @@ enum StemProjectImporter {
                     let clip = project.songs[song].tracks[track].clips[item]
                     guard !clip.isProjectionMedia, clip.waveformChannels == nil, let file = clip.audioFile else { continue }
                     if unreadable.contains(file.path) { continue }
+                    // Documents can use separate peak files instead of embedding
+                    // a second waveform in every repeated instance of a source.
+                    if clip.waveform.isEmpty, let externalOverviewIsCurrent {
+                        let current: Bool
+                        if let cached = externalOverviews[file.path] { current = cached }
+                        else {
+                            current = externalOverviewIsCurrent(directory.projectMedia(file.path))
+                            externalOverviews[file.path] = current
+                        }
+                        if current { continue }
+                    }
                     if cache[file.path] == nil {
-                        let url = directory.appendingPathComponent(file.path)
+                        let url = directory.projectMedia(file.path)
                         guard FileManager.default.fileExists(atPath: url.path) else { continue }
                         do { cache[file.path] = try audioOverview(url, duration: clip.duration).channels }
                         catch is CancellationError { throw CancellationError() }
@@ -573,7 +650,7 @@ enum StemProjectImporter {
     }
     private typealias MediaOverview = (waveform: [Double], peak: Double, channels: [[Double]])
     private struct MediaImportJob {
-        let source: URL, copied: URL
+        let source: URL, copy: URL?
         let relative: String
         let stem: ImportAudit.Stem
         let track: Int
@@ -586,11 +663,13 @@ enum StemProjectImporter {
     }
     /// Only a few bounded decode buffers exist at once. The result slots retain
     /// input order even when a shorter file finishes before an earlier file.
-    private static func prepareMedia(_ jobs: [MediaImportJob], progress: (@Sendable (Int, Int, String) -> Void)?) throws -> [Result<MediaOverview, Error>] {
+    private static func prepareMedia(_ jobs: [MediaImportJob], created: inout [URL], progress: (@Sendable (Int, Int, String) -> Void)?) throws -> [Result<MediaOverview, Error>] {
         try Task.checkCancellation()
         let lock = NSLock()
         var next = 0, completed = 0, failure: Error?
         var results = Array<Result<MediaOverview, Error>?>(repeating: nil, count: jobs.count)
+        var written: [URL] = []
+        defer { created.append(contentsOf: written) }
         var lastProgress = 0.0
         DispatchQueue.concurrentPerform(iterations: min(4, max(1, ProcessInfo.processInfo.activeProcessorCount - 1), jobs.count)) { _ in
             while true {
@@ -601,11 +680,14 @@ enum StemProjectImporter {
                 do {
                     let scoped = job.source.startAccessingSecurityScopedResource()
                     defer { if scoped { job.source.stopAccessingSecurityScopedResource() } }
-                    try FileManager.default.copyItem(at: job.source, to: job.copied)
-                    let overview = Result { try audioOverview(job.copied, duration: job.duration) }
+                    if let copy = job.copy {
+                        try FileManager.default.copyItem(at: job.source, to: copy)
+                        lock.lock(); written.append(copy); lock.unlock()
+                    }
+                    let overview = Result { try audioOverview(job.copy ?? job.source, duration: job.duration) }
                     if case .failure(let error) = overview {
                         if error is CancellationError { throw error }
-                        try FileManager.default.removeItem(at: job.copied)
+                        if let copy = job.copy { try FileManager.default.removeItem(at: copy) }
                     }
                     lock.lock(); results[index] = overview; completed += 1
                     let now = ProcessInfo.processInfo.systemUptime
@@ -639,7 +721,7 @@ enum StemProjectImporter {
     private static func restoreMultitrack(_ data: MultitrackRegionData, folder: URL, accessRoot: URL?, arrangement: inout Song,
                                           regionIndex: Int, directory: URL, lyrics: [JLLyricsDocument], drawerMarkerIDs: [UUID: UUID]?,
                                           renderedTracks: [UUID: Set<UUID>],
-                                          videoNames: inout MediaFileNames, copied: inout [URL],
+                                          videoNames: inout MediaFileNames, copied: inout [URL], copyMedia: Bool,
                                           progress: (@Sendable (Int, Int, String) -> Void)?,
                                           onUnreadable: ((String, Error) -> Void)?) throws {
         let fm = FileManager.default
@@ -687,15 +769,18 @@ enum StemProjectImporter {
         let lyricsKinds = Set(lyrics.map(\.kind))
         let total = snapshot.tracks.flatMap(\.clips).count
         var count = 0
-        func copy(_ filename: String, relative: String, allocated: String) throws -> URL {
+        func importedVideo(_ filename: String) throws -> String {
             guard MultitrackRegionData.isFilename(filename) else { throw ProjectError.invalid("Invalid Multitrack media name.") }
             let source = folder.appendingPathComponent(filename)
             let values = try source.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
             guard values.isRegularFile == true, values.isSymbolicLink != true else { throw ProjectError.invalid("Multitrack media is unavailable.") }
-            let target = directory.appendingPathComponent(relative, isDirectory: true).appendingPathComponent(allocated)
+            if !copyMedia { return try LinkedStemMedia.shared.reference(to: source, accessRoot: access, video: true) }
+            let allocated = videoNames.allocate(filename)
+            let target = directory.appendingPathComponent("Videos", isDirectory: true).appendingPathComponent(allocated)
             try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
             try fm.copyItem(at: source, to: target)
-            return target
+            copied.append(target)
+            return "Videos/" + allocated
         }
         for track in snapshot.tracks {
             for var item in track.clips {
@@ -706,10 +791,7 @@ enum StemProjectImporter {
                     let filename = String(audio.path.dropFirst(7))
                     if copiedAssets[filename] == nil {
                         do {
-                            let name = videoNames.allocate(filename)
-                            let target = try copy(filename, relative: "Videos", allocated: name)
-                            copied.append(target)
-                            copiedAssets[filename] = "Videos/" + name
+                            copiedAssets[filename] = try importedVideo(filename)
                         } catch { onUnreadable?(folder.appendingPathComponent(filename).path, error); continue }
                     }
                     item.audioFile = copiedAssets[filename].map { AudioFile(path: $0) }
@@ -789,7 +871,7 @@ enum StemProjectImporter {
     }
 
     static func build(scan: StemScan, remove: String, base: Project, destination: URL, progress: (@Sendable (Int, Int, String) -> Void)? = nil,
-                      onUnreadable: ((String, Error) -> Void)? = nil) throws -> Project {
+                      onUnreadable: ((String, Error) -> Void)? = nil, copyMedia: Bool = true) throws -> Project {
         try ProjectDirectoryPolicy.validate(destination)
         let js = try context(), fm = FileManager.default
         func clean(_ value: String, directory: Bool) throws -> String {
@@ -803,10 +885,10 @@ enum StemProjectImporter {
         }
         var virtual: [[String: Any]] = [], sources: [String: [ImportSourceFile]] = [:]
         var supplemental: [String: [ImportSourceFile]] = [:]
-        var multitracks: [String: ImportSourceFolder] = [:]
+        var sourceFolders: [String: ImportSourceFolder] = [:]
         for (index, folder) in scan.folders.enumerated() {
             let folderPath = "/\(index)/" + (try clean(folder.url.lastPathComponent, directory: true))
-            if folder.regionData != nil { multitracks[folderPath] = folder }
+            sourceFolders[folderPath] = folder
             var entries: [[String: Any]] = [], used = Set<String>()
             var separateItems: [UUID: String] = [:]
             let metadata = folder.regionData
@@ -894,7 +976,7 @@ enum StemProjectImporter {
         let media = destination.deletingLastPathComponent().appendingPathComponent(relativeFolder)
         try fm.createDirectory(at: media, withIntermediateDirectories: true)
         var jobs: [MediaImportJob] = []
-        var copiedVideo: [URL] = []
+        var copiedVideo: [URL] = [], copiedAudio: [URL] = []
         var regionIndices: [Int] = []
         var drawerPlacement: [URL: (id: UUID, start: Double)] = [:]
         var drawerChildren: [String: (parent: UUID, cue: Double, entry: MultitrackDrawerData.Entry)] = [:]
@@ -905,7 +987,7 @@ enum StemProjectImporter {
             for (songIndex, song) in audit.songs.enumerated() {
                 let gap = max(0, song.start - previousAuditEnd)
                 previousAuditEnd = song.end
-                let folder = multitracks[song.folderPath]
+                let folder = sourceFolders[song.folderPath]
                 let metadata = folder?.regionData
                 var origin = occupiedEnd + gap
                 if let folder, let drawer = folder.drawer,
@@ -942,7 +1024,9 @@ enum StemProjectImporter {
                         let name = fileNames.allocate(filename)
                         let rendered = renderedFiles[source.name]
                         let item = folder?.drawer != nil ? rendered?.items.first : nil
-                        jobs.append(MediaImportJob(source: source.url, copied: media.appendingPathComponent(name), relative: relativeFolder + "/" + name,
+                        let path = copyMedia ? relativeFolder + "/" + name : try LinkedStemMedia.shared.reference(
+                            to: source.url, accessRoot: folder?.accessRoot ?? source.url.deletingLastPathComponent())
+                        jobs.append(MediaImportJob(source: source.url, copy: copyMedia ? media.appendingPathComponent(name) : nil, relative: path,
                             stem: stem, track: track, start: region.startTime + (metadata?.region.startTime ?? 0) + (item?.offset ?? 0),
                             duration: item?.duration ?? source.duration, fileName: filename, renderedRegion: rendered == nil ? nil : region.id,
                             renderedSourceTrack: rendered?.track, pitchSemitones: metadata?.tunerUnbaked == true && rendered?.items.count == 1
@@ -950,7 +1034,7 @@ enum StemProjectImporter {
                     }
                 }
             }
-            let prepared = try prepareMedia(jobs, progress: progress)
+            let prepared = try prepareMedia(jobs, created: &copiedAudio, progress: progress)
             var renderedTracks: [UUID: [UUID: Set<UUID>]] = [:]
             for (job, result) in zip(jobs, prepared) {
                 guard case .success(let overview) = result else {
@@ -1049,7 +1133,7 @@ enum StemProjectImporter {
             for (index, entry) in audit.songs.enumerated() {
                 let regionIndex = regionIndices[index]
                 let region = arrangement.parts[regionIndex]
-                if let folder = multitracks[entry.folderPath], let data = folder.regionData {
+                if let folder = sourceFolders[entry.folderPath], let data = folder.regionData {
                     let lyrics = (supplemental[entry.folderPath] ?? []).compactMap { source -> JLLyricsDocument? in
                         if case .lyrics(let document) = source.payload { return document }
                         return nil
@@ -1058,7 +1142,7 @@ enum StemProjectImporter {
                     let markerIDs = child.flatMap { drawerMarkerIDs[$0.parent] }
                     try restoreMultitrack(data, folder: folder.url, accessRoot: folder.accessRoot, arrangement: &arrangement, regionIndex: regionIndex,
                         directory: destination.deletingLastPathComponent(), lyrics: lyrics, drawerMarkerIDs: markerIDs,
-                        renderedTracks: renderedTracks[region.id] ?? [:], videoNames: &videoNames, copied: &copiedVideo, progress: progress, onUnreadable: onUnreadable)
+                        renderedTracks: renderedTracks[region.id] ?? [:], videoNames: &videoNames, copied: &copiedVideo, copyMedia: copyMedia, progress: progress, onUnreadable: onUnreadable)
                     if let child, let parent = arrangement.parts.first(where: { $0.id == child.parent }) {
                         arrangement.parts[regionIndex].parentRegionID = child.parent
                         arrangement.parts[regionIndex].startTime = max(parent.startTime, arrangement.parts[regionIndex].startTime)
@@ -1081,17 +1165,24 @@ enum StemProjectImporter {
                         let target = arrangement.tracks.firstIndex(where: {
                             $0.kind == kind && (kind != .standard || ($0.parentTrackID == nil && $0.name == "Video"))
                         })
-                        let name = videoNames.allocate(file.name)
-                        let copy = videoDirectory.appendingPathComponent(name)
-                        try fm.createDirectory(at: videoDirectory, withIntermediateDirectories: true)
-                        try fm.copyItem(at: file.url, to: copy)
-                        copiedVideo.append(copy)
+                        let path: String
+                        if copyMedia {
+                            let name = videoNames.allocate(file.name)
+                            let copy = videoDirectory.appendingPathComponent(name)
+                            try fm.createDirectory(at: videoDirectory, withIntermediateDirectories: true)
+                            try fm.copyItem(at: file.url, to: copy)
+                            copiedVideo.append(copy)
+                            path = "Videos/" + name
+                        } else {
+                            let root = sourceFolders[entry.folderPath]?.accessRoot ?? file.url.deletingLastPathComponent()
+                            path = try LinkedStemMedia.shared.reference(to: file.url, accessRoot: root, video: true)
+                        }
                         let currentEnd = target.flatMap { row in
                             arrangement.tracks[row].clips.filter(\.isProjectionMedia).filter { $0.regionOwnerID == region.id }
                                 .map { $0.startTime + $0.duration }.max()
                         } ?? region.startTime
                         var clip = AudioClip(id: UUID(), name: file.url.deletingPathExtension().lastPathComponent,
-                            startTime: currentEnd, duration: file.duration, audioFile: AudioFile(path: "Videos/" + name))
+                            startTime: currentEnd, duration: file.duration, audioFile: AudioFile(path: path))
                         clip.regionOwnerID = region.id
                         if let target { arrangement.tracks[target].clips.append(clip) }
                         else {
@@ -1109,12 +1200,19 @@ enum StemProjectImporter {
                     }
                 }
             }
+            var names = GridItemNames(project.songs[0].tracks)
+            let existing = Set(project.songs[0].tracks.flatMap { $0.clips.map(\.id) })
+            for row in arrangement.tracks.indices {
+                for index in arrangement.tracks[row].clips.indices where !existing.contains(arrangement.tracks[row].clips[index].id) {
+                    arrangement.tracks[row].clips[index].name = names.allocate(arrangement.tracks[row].clips[index].name)
+                }
+            }
             project.songs[0] = arrangement
             project.updatedAt = ISO8601DateFormatter().string(from: Date())
             try project.validate()
             return project
         } catch {
-            for job in jobs { try? fm.removeItem(at: job.copied) }
+            for copy in copiedAudio { try? fm.removeItem(at: copy) }
             for file in copiedVideo { try? fm.removeItem(at: file) }
             throw error
         }

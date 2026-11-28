@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 s=Path('Apple/Shared/ProjectDocuments.swift').read_text()
 a=s.index('@MainActor final class MultipleProjectOpening:')
-b=s.index('private struct RecentMultipleProjectPicker:',a)
+b=s.index('private struct RecentProjectCheckboxStyle:',a)
 Path(sys.argv[1]).write_text(Path('Tests/Apple/MultipleProjectOpeningTests.swift').read_text()+'\n'+s[a:b])
 PY
 swiftc -swift-version 5 -parse-as-library "$fixture_dir/fixture.swift" -o "$fixture_dir/test"

@@ -3,6 +3,35 @@ import AVFoundation
 @testable import JarasApplication
 
 final class StemImportTests: XCTestCase {
+    func testLinkedStemsReopenFromTheirOwnFoldersAndKeepMatchingFileNamesIndependent() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = try fixture(root, folder: "Stems/Song A", file: "Kick.wav")
+        let second = try fixture(root, folder: "Song B", file: "Kick.wav", seconds: 0.2)
+        let directory = root.appendingPathComponent("Project")
+        let document = directory.appendingPathComponent("Show.jl")
+        let scan = try StemProjectImporter.scan([first,second])
+        let result = try StemProjectImporter.build(scan: scan, remove: "", base: .empty(name: "Links"),
+                                                   destination: document, copyMedia: false)
+        let paths = result.mediaPaths.sorted()
+        XCTAssertEqual(paths.count, 2)
+        let expected = Set([first,second].map { $0.appendingPathComponent("Kick.wav").standardizedFileURL.path })
+        let freshRegistry = LinkedStemMedia()
+        let files = paths.map { freshRegistry.resolve($0,in: directory) }
+        XCTAssertEqual(Set(files.map { $0.standardizedFileURL.path }), expected)
+        for (path,file) in zip(paths,files) {
+            XCTAssertTrue(LinkedStemMedia.isReference(path))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent(path).path))
+            XCTAssertEqual(freshRegistry.waveform(inSourceFolderOf: file)?.path, file.deletingLastPathComponent().appendingPathComponent("WF/Kick.wav.waveform").path)
+        }
+        let reopened = try ProjectDocumentCodec.decode(ProjectDocumentCodec.encode(result))
+        XCTAssertEqual(ProjectAudioRecovery.missingPaths(in: reopened,directory: directory), [])
+        let copied = try StemProjectImporter.build(scan: scan, remove: "", base: reopened, destination: document, copyMedia: true)
+        let newPaths = copied.mediaPaths.subtracting(result.mediaPaths)
+        XCTAssertEqual(newPaths.count, 2)
+        XCTAssertTrue(newPaths.allSatisfy { !LinkedStemMedia.isReference($0) && FileManager.default.fileExists(atPath: directory.appendingPathComponent($0).path) })
+    }
+
     func testImportedTracksUseTheirInstrumentIconAndKeepAnExistingCustomIcon() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -283,6 +312,26 @@ final class StemImportTests: XCTestCase {
         XCTAssertEqual(imported.songs[0].tracks.flatMap(\.clips).first?.pitchSemitones, -3)
     }
 
+    func testCreateAndAppendNumberStemItemsAcrossTheGridAndPreserveLegacyDuplicates() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let a = try fixture(root, folder: "Song A", file: "Kick.wav")
+        let b = try fixture(root, folder: "Song B", file: "Kick.wav")
+        let scan = try StemProjectImporter.scan([a, b])
+        let destination = root.appendingPathComponent("Project/Show.jl")
+        var project = try StemProjectImporter.build(scan: scan, remove: "", base: .empty(name: "Show"), destination: destination)
+        func labels(_ value: Project) -> [String] {
+            value.songs[0].tracks.flatMap { $0.clips.filter { $0.audioFile != nil }.map(\.name) }.sorted()
+        }
+        XCTAssertEqual(labels(project), ["Kick 001.wav", "Kick.wav"])
+        for row in project.songs[0].tracks.indices {
+            for index in project.songs[0].tracks[row].clips.indices { project.songs[0].tracks[row].clips[index].name = "Kick.wav" }
+        }
+        project = try JSONDecoder().decode(Project.self, from: JSONEncoder().encode(project))
+        try project.validate()
+        let appended = try StemProjectImporter.build(scan: scan, remove: "", base: project, destination: destination)
+        XCTAssertEqual(labels(appended), ["Kick 001.wav", "Kick 002.wav", "Kick.wav", "Kick.wav"])
+    }
     func testAppendMatchesCustomNamesBeforeTaxonomyAndPreservesTracks() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -556,6 +605,30 @@ final class StemImportTests: XCTestCase {
         let opened = try StemProjectImporter.populateChannelOverviews(project, directory: root)
         XCTAssertFalse(try XCTUnwrap(opened.songs[0].tracks[0].clips[0].waveformChannels).isEmpty)
     }
+    func testOpeningKeepsRepeatedExternalOverviewsAndEnrichesOnlyLegacyClips() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        _ = try fixture(root, folder: "Stems", file: "Kick.wav")
+        _ = try fixture(root, folder: "Stems", file: "Bass.wav")
+        var project = Project.empty(name: "External waveforms")
+        var track = Track(id: UUID(), name: "Audio", role: .init(rawValue: "audio"))
+        track.clips = ["Kick.wav", "Kick.wav", "Bass.wav", "Kick.wav"].enumerated().map { index, name in
+            AudioClip(id: UUID(), name: name, startTime: Double(index), duration: 0.1, audioFile: AudioFile(path: "Stems/" + name))
+        }
+        track.clips[3].waveform = [0.5]
+        project.songs[0].tracks = [track]
+        var checked: [String: Int] = [:]
+        let opened = try StemProjectImporter.populateChannelOverviews(project, directory: root, externalOverviewIsCurrent: {
+            checked[$0.lastPathComponent, default: 0] += 1
+            return $0.lastPathComponent == "Kick.wav"
+        })
+        let clips = opened.songs[0].tracks[0].clips
+        XCTAssertEqual(checked, ["Kick.wav": 1, "Bass.wav": 1])
+        XCTAssertEqual(Array(clips.prefix(2)), Array(track.clips.prefix(2)))
+        XCTAssertNotNil(clips[2].waveformChannels)
+        XCTAssertNotNil(clips[3].waveformChannels)
+        XCTAssertEqual(clips[3].waveform, [0.5])
+    }
     func fixture(_ root: URL, folder: String, file: String, seconds: Double = 0.1) throws -> URL {
         let directory = root.appendingPathComponent(folder)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -715,8 +788,13 @@ final class StemImportTests: XCTestCase {
         let bad = root.appendingPathComponent("bad.wav")
         try Data("not audio".utf8).write(to: bad)
         let existing = try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("Project/Stems").path)
-        XCTAssertThrowsError(try StemProjectImporter.prepareDroppedAudio([one, bad], start: 0, destinationTracks: [], destination: destination))
+        let skipped = try StemProjectImporter.prepareDroppedAudio([bad], start: 0, destinationTracks: [], destination: destination)
+        XCTAssertTrue(skipped.tracks.isEmpty)
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("Project/Stems").path), existing)
+        let mixed = try StemProjectImporter.prepareDroppedAudio([one, bad], start: 0, destinationTracks: [], destination: destination)
+        XCTAssertEqual(mixed.tracks.count, 1)
+        let kept = try XCTUnwrap(mixed.tracks.first?.clips.first?.audioFile)
+        XCTAssertEqual(try Data(contentsOf: destination.deletingLastPathComponent().appendingPathComponent(kept.path)), try Data(contentsOf: one))
     }
     func testGridBatchDropRoutesDownFromHoveredTrackAndCreatesOnlyOverflow() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

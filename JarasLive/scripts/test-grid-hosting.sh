@@ -16,6 +16,7 @@ region = Path('Apple/Shared/RegionEditor.swift').read_text()
 track_environment = region[region.index('/// Immutable menu target:'):]
 models = Path('Application/Project/ProjectModels.swift').read_text()
 geometry = models[models.index('public enum TrackHeightGeometry'):models.index('public struct TrackLinkOriginal')]
+elastic = models[models.index('public struct ElasticPoint:'):models.index('public struct AudioClip:')]
 theme = Path('Apple/Shared/Theme.swift').read_text()
 color_start = theme.index('extension Color {')
 color = theme[color_start:theme.index('\n}', color_start) + 2]
@@ -28,7 +29,9 @@ constants = '\n'.join(line for line in theme.splitlines() if line.strip().starts
 theme = interface + '\nenum JarasTheme {\n' + constants + '\n}\n'
 pads = Path('Apple/Shared/VinhetasPanel.swift').read_text()
 transfer = pads[pads.index('enum LibrarySamplerTransfer {'):pads.index('enum PadAudioBuffer {')]
-Path(sys.argv[1]).write_text('import UniformTypeIdentifiers\n' + geometry + fx[:fx.index('enum FXModelLookup')] + text[:text.index('/// The draft')] + track_environment + '\n' + appearance + '\n' + color + '\n' + theme + transfer)
+importer = Path('Application/Project/StemProjectImporter.swift').read_text()
+media_filter = importer[importer.index('enum GridMediaFileFilter {'):importer.index('/// Runs on a worker task')]
+Path(sys.argv[1]).write_text('import UniformTypeIdentifiers\n' + media_filter + geometry + elastic + fx[:fx.index('enum FXModelLookup')] + text[:text.index('/// The draft')] + track_environment + '\n' + appearance + '\n' + color + '\n' + theme + transfer)
 
 PY
 python3 - "$test_dir/main.swift" <<'PYTEST'
@@ -48,12 +51,15 @@ mount_start = source.index('private struct NativeTimelineBaseSlot:')
 mount = source[mount_start:source.index('\n@MainActor private final class NativeTimelineBaseController', mount_start)]
 tests += '\n' + mount + '\n' + Path('Tests/Apple/TimelineNativeMountTests.swift').read_text()
 zoom = source[source.index('private final class TimelineCoordinatePlane:'):source.index('/// Empty layers keep their content subscriptions')]
-limits = source[source.index('enum TimelineZoomLimits'):source.index('#if os(macOS)\nprivate struct TimelineBandsButton:')]
+limits_start = source.index('enum TimelineZoomLimits')
+limits = source[limits_start:source.index('\n}', limits_start) + 2] + '\n'
 transport = Path('Apple/Shared/TransportView.swift').read_text()
 tool_start = transport.index('enum ProGridTool:')
 current_tool = transport.index('    static var current: ProGridTool {', tool_start)
 tools = transport[tool_start:transport.index('    @MainActor func apply(', tool_start)] + transport[current_tool:transport.index('\n}', current_tool) + 2] + '\n'
-Path(sys.argv[1]).write_text(limits + zoom + tools + tests + '\nextension NormalizationFixtureContent {\n' + source[start:end] + '\n}\n')
+preferences_start = source.index('enum TimelineViewportPreferences {')
+preferences = source[preferences_start:source.index('\n}', preferences_start) + 2] + '\n'
+Path(sys.argv[1]).write_text(limits + preferences + zoom + tools + tests + '\nextension NormalizationFixtureContent {\n' + source[start:end] + '\n}\n')
 PYTEST
 swiftc Application/Project/ItemFadeCurve.swift -swift-version 5 Apple/Shared/NativeTooltips.swift Apple/Shared/NativeTimelineInputGate.swift Apple/Shared/GridSelectionInput.swift Apple/Shared/GridScrollView.swift "$test_dir/environment.swift" "$test_dir/divider.swift" "$test_dir/main.swift" -o "$test_dir/test"
 "$test_dir/test"

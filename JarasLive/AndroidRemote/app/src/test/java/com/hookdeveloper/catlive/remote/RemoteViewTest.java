@@ -210,6 +210,54 @@ public class RemoteViewTest {
   app.state.put("previewActive",true);app.refresh();assertEquals(RemoteWidgets.GREEN,preview.tint);
   app.choose("tp1");app.railButtons.get("mixer").performClick();assertEquals("grid",app.panel);assertTrue(app.mixerShown);
  }
+ @Test @Config(qualifiers="sw600dp-w960dp-h600dp-land")
+ public void tabletPlaybackLeavesSpaceForTempoAndTuner() throws Exception {
+  connect("director");
+  int width=RemoteWidgets.dp(960),height=RemoteWidgets.dp(600);
+  app.root.measure(View.MeasureSpec.makeMeasureSpec(width,View.MeasureSpec.EXACTLY),
+      View.MeasureSpec.makeMeasureSpec(height,View.MeasureSpec.EXACTLY));
+  app.root.layout(0,0,width,height);
+  app.root.forceLayout();
+  app.root.measure(View.MeasureSpec.makeMeasureSpec(width,View.MeasureSpec.EXACTLY),
+      View.MeasureSpec.makeMeasureSpec(height,View.MeasureSpec.EXACTLY));
+  app.root.layout(0,0,width,height);
+  View tempo=(View)app.bpm.getParent();
+  View tuner=(View)app.pitch.getParent();
+  int space=((View)tempo.getParent()).getWidth()-RemoteWidgets.dp(288+18+76);
+  int normalTempoWidth=Math.max(RemoteWidgets.dp(88),Math.round((space-RemoteWidgets.dp(26))*.325f));
+  assertEquals(2*normalTempoWidth,tempo.getWidth(),2);
+  assertEquals(Math.max(RemoteWidgets.dp(118),Math.round((space+RemoteWidgets.dp(26))*.325f)),tuner.getWidth(),2);
+  assertEquals(RemoteWidgets.dp(44),((ViewGroup)tempo).getChildAt(0).getWidth());
+  assertEquals(RemoteWidgets.dp(44),((ViewGroup)tempo).getChildAt(2).getWidth());
+  assertTrue(app.bpm.getWidth()>=RemoteWidgets.dp(70));
+  assertTrue(tempo.getRight()<=tuner.getLeft());
+  assertTrue(app.play.getWidth()>=RemoteWidgets.dp(44));
+  View file=app.railButtons.get("menu");
+  assertTrue(file.isShown());
+  assertEquals("File",file.getContentDescription());
+  assertTrue(file.performClick());
+  Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
+  org.robolectric.shadows.ShadowWindowManagerImpl windows =
+      org.robolectric.shadow.api.Shadow.extract(app.getWindowManager());
+  assertTrue(windows.getViews().stream().anyMatch(view ->
+      RemotePartsTest.findText(view,RemoteText.ui("Projetos"))!=null &&
+      RemotePartsTest.findText(view,RemoteText.ui("Sair do Remote"))!=null));
+ }
+
+ @Test @Config(qualifiers="sw600dp-w960dp-h600dp-land")
+ public void tabletObserverShowsTheActivePlaylistWithoutThePlaylistCollection() throws Exception {
+  connect("observer");
+  app.state.remove("playlists");
+  app.state.put("selectedPlaylist","playlist").put("selectedPlaylistName","Repertório principal");
+  app.refresh();
+  assertEquals("Repertório principal",app.observerPlaylist.getText().toString());
+  assertEquals(1,app.transport.indexOfChild((View)app.observerPlaylist.getParent()));
+  app.state.remove("selectedPlaylistName");
+  app.state.remove("selectedPlaylist");
+  app.refresh();
+  assertEquals(RemoteText.ui("Todas as regiões"),app.observerPlaylist.getText().toString());
+ }
+
  @Test @Config(qualifiers="sw800dp-w1280dp-h800dp-land") public void manualGridScrollRevealsHeadersAndExtendsFollowPause()throws Exception{
   connect("director");RemoteGrid grid=app.grid;grid.layout(0,0,800,600);
   android.graphics.Canvas canvas=new android.graphics.Canvas(android.graphics.Bitmap.createBitmap(800,600,android.graphics.Bitmap.Config.ARGB_8888));

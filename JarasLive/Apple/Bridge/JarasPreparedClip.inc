@@ -4,12 +4,7 @@
 // Keep history ready for live rate/pitch edits. Changed spectra use Apple's
 // vectorized FFT on both Intel and ARM. The portable implementation remains
 // available to Windows; the CatLive warmup optimizations below are opt-in.
-#define SIGNALSMITH_USE_ACCELERATE 1
-#define CATLIVE_SIGNALSMITH_NEUTRAL_WARMUP 1
-#define CATLIVE_SIGNALSMITH_BATCH_OUTPUT 1
-#define CATLIVE_SIGNALSMITH_NEUTRAL_SYNTHESIS 1
-#define CATLIVE_SIGNALSMITH_STATE_COPY 1
-#include "../../Windows/ThirdParty/Signalsmith/signalsmith-stretch.h"
+#include "../../Core/Audio/CatLiveStretch.hpp"
 #include <thread>
 #include <mutex>
 #include <condition_variable>
@@ -61,10 +56,10 @@ struct PreparedPCMReader {
         static constexpr size_t limit = 16 * 1024 * 1024;
         void retain(std::shared_ptr<const PreparedPCMBlock> block) {
             std::lock_guard<std::mutex> lock(mutex);
-            bytes += size_t(block->count) * 2 * sizeof(float);
+            bytes += block->ownedBytes;
             blocks.push_back(std::move(block));
             while (bytes > limit) {
-                bytes -= size_t(blocks.front()->count) * 2 * sizeof(float);
+                bytes -= blocks.front()->ownedBytes;
                 blocks.pop_front();
             }
         }
@@ -141,8 +136,8 @@ struct PreparedPCMReader {
             auto block = std::make_shared<PreparedPCMBlock>();
             block->first = first + offset;
             block->count = std::min(blockFrames, int(buffer.frameLength) - offset);
-            for (int channel = 0; channel < 2; ++channel) {
-                const float *input = data[std::min(channel, int(channels) - 1)] + offset * stride;
+            for (unsigned channel = 0; channel < std::min(2u, channels); ++channel) {
+                const float *input = data[channel] + offset * stride;
                 auto &output = block->samples[channel];
                 if (stride == 1) output.assign(input, input + block->count);
                 else {
@@ -350,7 +345,9 @@ struct PreparedPCMCache {
                 page->first = pageFirst;
                 page->count = std::min(pageSize, block->count - offset);
                 page->block = block;
-                for (int channel = 0; channel < 2; ++channel) page->samples[channel] = block->samples[channel].data() + offset;
+                page->samples[0] = block->samples[0].data() + offset;
+                // Both outputs can read the same immutable mono payload.
+                page->samples[1] = block->samples[1].empty() ? page->samples[0] : block->samples[1].data() + offset;
                 pages.publish(slots[pageIndex], std::move(page));
             }
             ++decoded;

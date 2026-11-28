@@ -56,7 +56,7 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
     TextView statusText,current,selectionTitle,bpm,pitch,next,queued,information,playCaption,pauseCaption;
     Button play,pause,fadeoutControl,repeat,auto,bypass,live,save,playlistButton;
     SongDisplay nextDisplay,queuedDisplay;
-    TextView observerQueue,noticeRemaining,noticeCount,tabletInformation;
+    TextView observerQueue,observerPlaylist,noticeRemaining,noticeCount,tabletInformation;
     EditText noticeEditor;Button noticeSend,noticeClear,noticePin,noticePinStopped,noticeSave;
     final Button[] noticeSlots=new Button[4];
     int noticeSlot=-1;String globalNoticeDraft="";
@@ -210,10 +210,10 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
     Button rail(String key,String title,Runnable run){Button b=new Button(this,"",run);if(key.startsWith("TP"))b.setText(key);else b.icon(key,title);b.topToolbar=horizontalToolbar();b.style(TOOLBAR_INACTIVE,false);LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(dp(tabletLayout()&&remote.mode.equals("director")?34:44),dp(44));if(horizontalToolbar()){lp.width=dp(34);lp.height=dp(32);lp.setMargins(dp(2),0,dp(2),0);}else lp.setMargins(dp(4),dp(4),dp(4),dp(4));rail.addView(b,lp);railButtons.put(key,b);return b;}
     boolean tabletLayout(){return RemoteWidgets.tablet&&(remote.mode.equals("observer")||getResources().getConfiguration().orientation==Configuration.ORIENTATION_LANDSCAPE);}
     void buildWorkspace(){
-        if(state==null)return;mixerAdjustment.dismiss();if(vinhetas!=null){vinhetas.releaseAll();vinhetas=null;}songProgress=null;observerPanes=null;observerHeaderDisplays=null;observerHeaderButtons=null;observerPrompterPane=null;observerListPane=null;current=null;observerQueue=null;tabletInformation=null;nextDisplay=null;queuedDisplay=null;noticeEditor=null;noticeSend=null;noticeRemaining=null;grid=null;tp=null;parts=null;horizontalParts=null;selectionTitle=null;playCaption=null;pauseCaption=null;trackColumn=null;setlistScroll=null;mixerScroll=null;playlistButton=null;auto=null;bypass=null;live=null;save=null;play=null;pause=null;fadeoutControl=null;repeat=null;bpm=null;pitch=null;next=null;queued=null;information=null;screen="workspace";fadeoutCard=null;renderedMode=remote.mode;structure="";mixerStructure="";trackRows.clear();songRows.clear();railButtons.clear();root.removeAllViews();
+        if(state==null)return;mixerAdjustment.dismiss();if(vinhetas!=null){vinhetas.releaseAll();vinhetas=null;}songProgress=null;observerPanes=null;observerHeaderDisplays=null;observerHeaderButtons=null;observerPrompterPane=null;observerListPane=null;current=null;observerQueue=null;observerPlaylist=null;tabletInformation=null;nextDisplay=null;queuedDisplay=null;noticeEditor=null;noticeSend=null;noticeRemaining=null;grid=null;tp=null;parts=null;horizontalParts=null;selectionTitle=null;playCaption=null;pauseCaption=null;trackColumn=null;setlistScroll=null;mixerScroll=null;playlistButton=null;auto=null;bypass=null;live=null;save=null;play=null;pause=null;fadeoutControl=null;repeat=null;bpm=null;pitch=null;next=null;queued=null;information=null;screen="workspace";fadeoutCard=null;renderedMode=remote.mode;structure="";mixerStructure="";trackRows.clear();songRows.clear();railButtons.clear();root.removeAllViews();
         work=row(this);work.setGravity(Gravity.TOP);root.addView(work,new FrameLayout.LayoutParams(-1,-1));
         rail=horizontalToolbar()?row(this):column(this);rail.setBackground(RemoteWidgets.panel(0));rail.setPadding(0,dp(4),0,0);ScrollView sidebar=new ScrollView(this);sidebar.setFillViewport(true);sidebar.setVerticalScrollBarEnabled(false);if(!horizontalToolbar())sidebar.addView(rail);if(!horizontalToolbar()&&!sidebarHidden&&!fullscreen&&!panel.equals("notices"))work.addView(sidebar,new LinearLayout.LayoutParams(dp(tabletLayout()&&remote.mode.equals("director")?42:52),-1));
-        rail("menu","Menu",()->menu(railButtons.get("menu"),new String[]{"Projetos","Sair do Remote"},i->{if(i==0)projects();else remote.exit();}));
+        rail("menu","Menu",()->openFileMenu(railButtons.get("menu")));
         boolean director=remote.mode.equals("director"),notices=remote.mode.equals("notices");
         if(director)rail("mixer","Track Mixer",()->{if(tabletLayout()){if(!panel.equals("grid")){panel="grid";mixerShown=true;}else mixerShown=!mixerShown;buildWorkspace();}else choose("mixer");});
         if(!notices)rail("setlist","Setlist",()->{if(tabletLayout()&&(director||panel.startsWith("tp"))){setlistShown=!setlistShown;buildWorkspace();}else choose("setlist");});
@@ -381,7 +381,7 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         }
         current=label(this,"",13,GREEN);current.setTypeface(bold);current.setMaxLines(2);
         display.addView(current,new LinearLayout.LayoutParams(-1,-2));transport.addView(display,new LinearLayout.LayoutParams(-1,-2));
-        if(!director){space(transport,6);LinearLayout queueBox=column(this);pad(queueBox,6,6);queueBox.setBackground(surface(0xff1d1d1d,0xff131313,0xff555555,5));TextView caption=label(this,"Fila de espera",10,SECONDARY);caption.setTypeface(bold);queueBox.addView(caption,new LinearLayout.LayoutParams(-1,dp(15)));observerQueue=label(this,"—",13,YELLOW);observerQueue.setTypeface(bold);queueBox.addView(observerQueue,new LinearLayout.LayoutParams(-1,dp(20)));transport.addView(queueBox,new LinearLayout.LayoutParams(-1,-2));space(transport,6);information=centered("",10,GREEN,true);information.setBackground(surface(0xff101010,0xff101010,0xff444444,0));transport.addView(information,new LinearLayout.LayoutParams(-1,dp(25)));if(sidebarHidden&&!horizontalToolbar()){Button restore=new Button(this,"›",()->{sidebarHidden=false;buildWorkspace();});transport.addView(restore,new LinearLayout.LayoutParams(dp(44),dp(25)));}return;}
+        if(!director){space(transport,6);LinearLayout queueBox=column(this);pad(queueBox,6,6);queueBox.setBackground(surface(0xff1d1d1d,0xff131313,0xff555555,5));TextView caption=label(this,"Fila de espera",10,SECONDARY);caption.setTypeface(bold);queueBox.addView(caption,new LinearLayout.LayoutParams(-1,dp(15)));observerQueue=label(this,"—",13,YELLOW);observerQueue.setTypeface(bold);queueBox.addView(observerQueue,new LinearLayout.LayoutParams(-1,dp(20)));transport.addView(queueBox,new LinearLayout.LayoutParams(-1,-2));addObserverPlaylistDisplay();space(transport,6);information=centered("",10,GREEN,true);information.setBackground(surface(0xff101010,0xff101010,0xff444444,0));transport.addView(information,new LinearLayout.LayoutParams(-1,dp(25)));if(sidebarHidden&&!horizontalToolbar()){Button restore=new Button(this,"›",()->{sidebarHidden=false;buildWorkspace();});transport.addView(restore,new LinearLayout.LayoutParams(dp(44),dp(25)));}return;}
         LinearLayout buttons=row(this);
         buttons.setBaselineAligned(false);
         addTransportButtons(buttons,false);
@@ -440,8 +440,27 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         }
         observerHeaderButtons=column(this);LinearLayout.LayoutParams buttonsLp=new LinearLayout.LayoutParams(-2,-2);buttonsLp.leftMargin=dp(8);header.addView(observerHeaderButtons,buttonsLp);
         for(int i=1;i<=2;i++){final String target="tp"+i;Button button=new Button(this,"TP"+i,()->choose(target));button.transportStyle(panel.equals(target)?GREEN:RED,Color.BLACK);observerHeaderButtons.addView(button);}
+        addObserverPlaylistDisplay();
         if(sidebarHidden&&!horizontalToolbar()){Button restore=new Button(this,"›",()->{sidebarHidden=false;buildWorkspace();});transport.addView(restore,new LinearLayout.LayoutParams(dp(44),dp(25)));}
     }
+    private void addObserverPlaylistDisplay() {
+        LinearLayout display=row(this);
+        display.setGravity(Gravity.CENTER_VERTICAL);
+        pad(display,8,0);
+        display.setBackground(RemoteWidgets.display(5));
+        TextView title=label(this,RemoteText.ui("Playlist"),11,SECONDARY);
+        display.addView(title,new LinearLayout.LayoutParams(-2,-2));
+        observerPlaylist=label(this,"",11,TEXT);
+        observerPlaylist.setSingleLine(true);
+        observerPlaylist.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams name=new LinearLayout.LayoutParams(0,-2,1);
+        name.leftMargin=dp(8);
+        display.addView(observerPlaylist,name);
+        LinearLayout.LayoutParams size=new LinearLayout.LayoutParams(-1,dp(24));
+        size.topMargin=dp(6);
+        transport.addView(display,size);
+    }
+
     void buildTabletObserverContent(){
         observerPanes=column(this);observerPanes.setGravity(Gravity.TOP);content.addView(observerPanes,new FrameLayout.LayoutParams(-1,-1));
         if(panel.startsWith("tp")){tp=new RemoteTeleprompter(this,this,panel.equals("tp1")?1:2);observerPrompterPane=tp;observerPanes.addView(tp);}
@@ -537,7 +556,18 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         if(queuedDisplay!=null)queuedDisplay.update(state.optBoolean("subPlaying")?"Sub Play":"Queued",RemoteModel.queuedSongName(state),displayBPM(displays,"queuedBPM"));
         if(observerQueue!=null)observerQueue.setText(SongDisplay.songText(RemoteModel.queuedSongName(state),displayBPM(displays,"queuedBPM")));
         refreshFooterInformation();refreshNotices();
-        if(playlistButton!=null){JSONObject selected=RemoteModel.find(RemoteModel.array(state,"playlists"),RemoteModel.id(state,"selectedPlaylist"));playlistButton.setText(selected==null?"All Regions":selected.optString("name"));}
+        if (playlistButton!=null || observerPlaylist!=null) {
+            String selectedID=RemoteModel.id(state,"selectedPlaylist");
+            JSONObject selected=RemoteModel.find(RemoteModel.array(state,"playlists"),selectedID);
+            if (playlistButton!=null) playlistButton.setText(selected==null?"All Regions":selected.optString("name"));
+            if (observerPlaylist!=null) {
+                String playlistName=state.optString("selectedPlaylistName","");
+                if (playlistName.isEmpty()) {
+                    playlistName=selected!=null?selected.optString("name"):selectedID.isEmpty()?RemoteText.ui("Todas as regiões"):"—";
+                }
+                if (!playlistName.contentEquals(observerPlaylist.getText())) observerPlaylist.setText(playlistName);
+            }
+        }
         if(parts!=null)parts.refresh();if(horizontalParts!=null)horizontalParts.refresh();refreshStructure();for(TrackRow row:trackRows.values())row.refresh();for(SongRow row:songRows)row.invalidate();if(grid!=null){grid.refreshItemEditor();grid.invalidate();}if(tp!=null)tp.invalidate();
         updateTabs();
         for (Map.Entry<String, Button> entry : railButtons.entrySet()) {
@@ -714,9 +744,6 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         transport.addView(middle,new LinearLayout.LayoutParams(-1,-2));
         FrameLayout display=new FrameLayout(this);
         middle.addView(display,new LinearLayout.LayoutParams(-1,dp(49)));
-        Button file=railButtons.get("menu");
-        file.setContentDescription("File");
-        display.addView(file,new FrameLayout.LayoutParams(dp(34),dp(32),Gravity.TOP|Gravity.LEFT));
         tabletInformation=centered("",10,YELLOW,true);
         tabletInformation.setMaxLines(2);
         FrameLayout.LayoutParams info=new FrameLayout.LayoutParams(dp(88),dp(32),Gravity.TOP|Gravity.LEFT);
@@ -738,21 +765,24 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         status.addView(device);
         status.addView(new RemoteResourceMeters(this),new LinearLayout.LayoutParams(dp(126),dp(16)));
         display.addView(status,new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.RIGHT));
+        Button file=railButtons.get("menu");
+        file.setContentDescription("File");
+        file.setOnClickListener(this::openFileMenu);
+        display.addView(file,new FrameLayout.LayoutParams(dp(34),dp(32),Gravity.TOP|Gravity.LEFT));
 
-        LinearLayout controls=row(this);
-        controls.setGravity(Gravity.CENTER_VERTICAL);
+        TabletTransportControls controls=new TabletTransportControls(this);
         middle.addView(controls,new LinearLayout.LayoutParams(-1,dp(44)));
         LinearLayout playback=tabletTransportGroup(controls,0,1);
         addTransportButtons(playback,true);
 
-        LinearLayout tempo=tabletTransportGroup(controls,100,0);
-        tempo.addView(new Button(this,"−",()->remote.action("tempo",null,Math.max(20,state.optDouble("bpm")-1))),new LinearLayout.LayoutParams(dp(25),-1));
+        LinearLayout tempo=tabletTransportGroup(controls,176,0);
+        tempo.addView(new Button(this,"−",()->remote.action("tempo",null,Math.max(20,state.optDouble("bpm")-1))),new LinearLayout.LayoutParams(dp(44),-1));
         bpm=centered("",13,TEXT,true);
         configureTempoField(bpm);
         tempo.addView(bpm,new LinearLayout.LayoutParams(0,-1,1));
-        tempo.addView(new Button(this,"+",()->remote.action("tempo",null,Math.min(400,state.optDouble("bpm")+1))),new LinearLayout.LayoutParams(dp(25),-1));
+        tempo.addView(new Button(this,"+",()->remote.action("tempo",null,Math.min(400,state.optDouble("bpm")+1))),new LinearLayout.LayoutParams(dp(44),-1));
 
-        LinearLayout tuner=tabletTransportGroup(controls,126,0);
+        LinearLayout tuner=tabletTransportGroup(controls,118,0);
         tuner.addView(centered("Tuner",10,TEXT,true),new LinearLayout.LayoutParams(dp(34),-1));
         tuner.addView(new Button(this,"−",()->pitch(-1)),new LinearLayout.LayoutParams(dp(24),-1));
         pitch=centered("",12,GREEN,true);
@@ -765,7 +795,32 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
         Button setlist=railButtons.get("setlist");
         setlist.transportIcon("setlist","Setlist","");
         controls.addView(setlist,tabletPanelControl(34,44));
+        controls.tempo=tempo;
+        controls.tuner=tuner;
         addTransportProgress(middle);
+    }
+
+    private static final class TabletTransportControls extends LinearLayout {
+        View tempo;
+        View tuner;
+
+        TabletTransportControls(android.content.Context context) {
+            super(context);
+            setOrientation(HORIZONTAL);
+            setGravity(Gravity.CENTER_VERTICAL);
+        }
+
+        @Override protected void onMeasure(int widthSpec,int heightSpec) {
+            if(tempo!=null && tuner!=null && MeasureSpec.getMode(widthSpec)!=MeasureSpec.UNSPECIFIED) {
+                int screenWidth=getResources().getConfiguration().screenWidthDp;
+                int playbackWidth=4*Math.min(72,Math.max(44,Math.round(screenWidth*.085f)));
+                int tempoSpace=MeasureSpec.getSize(widthSpec)-dp(playbackWidth+18+76);
+                int normalTempoWidth=Math.max(dp(88),Math.round((tempoSpace-dp(26))*.325f));
+                tempo.getLayoutParams().width=2*normalTempoWidth;
+                tuner.getLayoutParams().width=Math.max(dp(118),Math.round((tempoSpace+dp(26))*.325f));
+            }
+            super.onMeasure(widthSpec,heightSpec);
+        }
     }
 
     private LinearLayout tabletTransportGroup(LinearLayout controls,int width,float weight) {
@@ -1058,6 +1113,13 @@ public final class MainActivity extends Activity implements RemoteSession.Listen
     void playlists(){LinearLayout box=column(this);box.setBackground(RemoteWidgets.panel(10));LinearLayout heading=row(this);TextView title=label(this,"☷  Playlists",16,GREEN);pad(title,14,12);heading.addView(title,new LinearLayout.LayoutParams(0,dp(54),1));Button close=new Button(this,"×",()->{});heading.addView(close,new LinearLayout.LayoutParams(dp(40),dp(40)));box.addView(heading);ScrollView scroll=new ScrollView(this);LinearLayout rows=column(this);pad(rows,10,10);scroll.addView(rows);box.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));PopupWindow popup=new PopupWindow(box,Math.min(dp(310),getResources().getDisplayMetrics().widthPixels-dp(24)),dp(Math.min(420,(RemoteModel.array(state,"playlists").length()+1)*47+75)),true);popup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));popup.setElevation(dp(14));popup.setOutsideTouchable(true);close.setOnClickListener(v->popup.dismiss());List<JSONObject> lists=new ArrayList<>();lists.add(null);lists.addAll(RemoteModel.list(RemoteModel.array(state,"playlists")));for(JSONObject list:lists){String id=RemoteModel.id(list,"id"),name=list==null?"All Regions":list.optString("name");boolean selected=id.equalsIgnoreCase(RemoteModel.id(state,"selectedPlaylist"));Button b=new Button(this,(selected?"▎  ":"    ")+name+(selected?"  ✓":""),()->{popup.dismiss();if(remote.mode.equals("director"))remote.action("selectPlaylist",id.isEmpty()?null:id,0);});b.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);b.setTextSize(14);b.style(selected?GREEN:TEXT,selected);b.setOnLongClickListener(v->{if(!id.isEmpty())playlistContext(v,id,name);return true;});rows.addView(b,new LinearLayout.LayoutParams(-1,dp(42)));space(rows,5);}popup.showAsDropDown(playlistButton,0,dp(4));}
     void playlistContext(View v){String id=RemoteModel.id(state,"selectedPlaylist");JSONObject playlist=RemoteModel.find(RemoteModel.array(state,"playlists"),id);if(playlist!=null)playlistContext(v,id,playlist.optString("name"));}
     void playlistContext(View v,String id,String name){if(!remote.mode.equals("director"))return;menu(v,new String[]{"Editar","Apagar playlist"},i->{if(i==0)input("Nome da playlist",name,false,updatedName->remote.command("renamePlaylist",id,0,updatedName,null,null));else confirm("Apagar playlist?","","Apagar",()->remote.action("deletePlaylist",id,0));});}
+    private void openFileMenu(View anchor) {
+        menu(anchor,new String[]{"Projetos","Sair do Remote"},index->{
+            if(index==0) projects();
+            else remote.exit();
+        });
+    }
+
     void projects(){JSONObject projects=state.optJSONObject("projects");LinearLayout body=column(this);if(projects==null){body.addView(label(this,"Este computador não oferece projetos recentes pelo Remote.",14,SECONDARY));}else{for(JSONObject r:RemoteModel.list(RemoteModel.array(projects,"recent"))){Button b=new Button(this,r.optString("name"),()->{closeDialog();confirm("Abrir outro projeto?","O projeto atual será substituído por "+r.optString("name")+".","Abrir projeto",()->remote.action("openRecentProject",RemoteModel.id(r,"id"),0));});b.setText(r.optString("name"));b.setEnabled(!projects.optBoolean("busy")&&projects.optBoolean("canOpen"));b.setOnLongClickListener(v->{if(projects.optBoolean("canOpenInNewTab"))menu(v,new String[]{"Abrir em nova aba"},i->{closeDialog();remote.action("openRecentProjectInNewTab",RemoteModel.id(r,"id"),0);});return true;});body.addView(b,new LinearLayout.LayoutParams(-1,dp(50)));space(body,6);}String error=projects.optString("error","");if(!error.isEmpty())body.addView(label(this,error,13,RED));}dialog("Projetos recentes — "+remote.peerName,body,"Fechar",()->{});}
     View buildNotices(){
         LinearLayout body=column(this);pad(body,16,12);body.setBackground(RemoteWidgets.panel(0));

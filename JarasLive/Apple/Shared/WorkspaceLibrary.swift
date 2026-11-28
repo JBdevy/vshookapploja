@@ -11,7 +11,7 @@ import UIKit
 private struct LibraryScrollView<Content: View>: View {
     let axes: Axis.Set
     @ViewBuilder let content: () -> Content
-    @AppStorage(JarasInterfaceTheme.preferenceKey) private var theme = JarasInterfaceTheme.defaultTheme
+    @WorkspacePreference(JarasInterfaceTheme.preferenceKey) private var theme = JarasInterfaceTheme.defaultTheme
 
     init(_ axes: Axis.Set = .vertical, @ViewBuilder content: @escaping () -> Content) {
         self.axes = axes
@@ -122,12 +122,15 @@ private struct LibraryRowDrag: ViewModifier {
     let data: () -> Data?
     let provider: () -> NSItemProvider
     var click: (() -> Void)?
+    var height: CGFloat = 27
 
     func body(content: Content) -> some View {
+        let row = content.frame(maxWidth: .infinity, alignment: .leading).frame(height: height).contentShape(Rectangle())
         #if os(macOS)
-        content.overlay(LibraryRowDragInput(title: title, type: type, data: data, click: click))
+        row.overlay(LibraryRowDragInput(title: title, type: type, data: data, click: click)
+            .frame(maxWidth: .infinity, maxHeight: .infinity))
         #else
-        content.onDrag(provider)
+        row.onDrag(provider)
         #endif
     }
 }
@@ -152,6 +155,7 @@ private final class LibraryRowDragView: NSView, NSDraggingSource {
     var data: (() -> Data?)?
     var click: (() -> Void)?
     private var pressedAt: NSPoint?
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func mouseDown(with event: NSEvent) { pressedAt = event.locationInWindow }
     override func mouseUp(with event: NSEvent) {
         defer { pressedAt = nil }
@@ -449,7 +453,7 @@ enum WorkspaceBrowserFileTransfer {
 private struct WorkspaceFilesPane: View {
     @ObservedObject var files: WorkspaceFiles
     let theme: JarasInterfaceTheme
-    @AppStorage("catlive.files.columns") private var columns = true
+    @WorkspacePreference("catlive.files.columns") private var columns = true
     @State private var query = ""
     @State private var choosingFolder = false
     @State private var selectionError: String?
@@ -666,7 +670,8 @@ private struct WorkspaceFilesPane: View {
             #if os(iOS)
             label.onDrag { WorkspaceBrowserFileTransfer.provider(entry.url) }
             #else
-            label.onDrag { NSItemProvider(item: entry.url as NSURL, typeIdentifier: UTType.fileURL.identifier) }
+            label.modifier(LibraryRowDrag(title: entry.name, type: .fileURL,
+                data: { entry.url.dataRepresentation }, provider: { NSItemProvider(object: entry.url as NSURL) }, height: 25))
                 .contextMenu {
                     Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([entry.url]) }
                 }
@@ -711,7 +716,7 @@ struct DesktopLibraryDock: View {
     let theme: JarasInterfaceTheme
     let show: ShowController
     let available: CGFloat
-    @AppStorage("jaras.layout.library.open", store: WorkspaceLayoutPreferences.storage) private var visible = false
+    @WorkspacePreference("jaras.layout.library.open", store: WorkspaceLayoutPreferences.storage) private var visible = false
 
     var body: some View {
         DesktopLibraryPane(theme: theme, show: show, available: available, visible: visible)
@@ -731,8 +736,8 @@ struct DesktopLibraryPane: View {
     let show: ShowController
     let available: CGFloat
     let visible: Bool
-    @AppStorage("jaras.layout.library.width", store: WorkspaceLayoutPreferences.storage) private var saved = 344.0
-    @AppStorage(WorkspaceLibrary.folderWidthKey, store: WorkspaceLayoutPreferences.storage) private var folders = WorkspaceLibrary.defaultFolderWidth
+    @WorkspacePreference("jaras.layout.library.width", store: WorkspaceLayoutPreferences.storage) private var saved = 344.0
+    @WorkspacePreference(WorkspaceLibrary.folderWidthKey, store: WorkspaceLayoutPreferences.storage) private var folders = WorkspaceLibrary.defaultFolderWidth
     @State private var liveWidth: Double?
     @State private var visibilityChanges = PassthroughSubject<Bool, Never>()
     var body: some View {
@@ -752,7 +757,7 @@ struct DesktopLibraryPane: View {
         .onChange(of: visible) { visibilityChanges.send($0) }
     }
 }
-private struct SamplerPaneIdentity: Hashable {
+struct WorkspaceDockContentIdentity: Hashable {
     let project: UUID
     let controller: ObjectIdentifier
     let theme: JarasInterfaceTheme
@@ -766,7 +771,7 @@ struct DesktopSamplerPane: View {
     var body: some View {
         GeometryReader { geometry in
             RetainedWorkspacePane(width: geometry.size.width, visible: visible,
-                identity: AnyHashable(SamplerPaneIdentity(project: show.snapshot.project.id,
+                identity: AnyHashable(WorkspaceDockContentIdentity(project: show.snapshot.project.id,
                     controller: ObjectIdentifier(show), theme: theme))) {
                 WorkspaceLibrary(theme: theme, show: show, samplersOnly: true, visibilityChanges: visibilityChanges)
             }
@@ -824,7 +829,7 @@ struct ResizableWorkspaceLibrary: View {
     var finishOuterResize: (() -> Void)? = nil
     var visibilityChanges: PassthroughSubject<Bool, Never>? = nil
 
-    @AppStorage(WorkspaceLibrary.folderWidthKey, store: WorkspaceLayoutPreferences.storage)
+    @WorkspacePreference(WorkspaceLibrary.folderWidthKey, store: WorkspaceLayoutPreferences.storage)
     private var folderWidth = WorkspaceLibrary.defaultFolderWidth
     @State private var dragStart: CGFloat?
 
@@ -859,7 +864,7 @@ private struct LibraryColumns<Folders: View, Entries: View>: View {
     let theme: JarasInterfaceTheme
     let folders: Folders
     let entries: Entries
-    @AppStorage(WorkspaceLibrary.folderWidthKey, store: WorkspaceLayoutPreferences.storage)
+    @WorkspacePreference(WorkspaceLibrary.folderWidthKey, store: WorkspaceLayoutPreferences.storage)
     private var folderWidth = WorkspaceLibrary.defaultFolderWidth
     @State private var liveFolderWidth: CGFloat?
     @State private var dragStart: CGFloat?
@@ -1131,7 +1136,7 @@ private struct LibraryDockPickerList<Content: View>: View {
     let show: ShowController
     @Binding var tab: Tab
     let closeSetlist: () -> Void
-    @AppStorage(LibraryNote.storageKey, store: WorkspaceLayoutPreferences.storage) private var storedNotes = Data()
+    @WorkspacePreference(LibraryNote.storageKey, store: WorkspaceLayoutPreferences.storage) private var storedNotes = Data()
     @State private var selection: UUID?
     @State private var namingNote: LibraryNote?
     @State private var showingPicker = false
@@ -1261,7 +1266,7 @@ struct WorkspaceLibrary: View {
     private static let nativeSampleCategories = voiceGuideCategories + otherNativeSampleCategories
 
     private static let nativeTypes: [String: String] = [
-        "EQ": "EQ", "Compressor": "Dynamics", "Pitch": "Pitch Shift", "Delay": "Delay",
+        NativeFXSettings.waveLFOName: "Dynamics", "EQ": "EQ", "Compressor": "Dynamics", "Pitch": "Pitch Shift", "Delay": "Delay",
         "Reverb": "Reverb", NativeFXSettings.reverbConvolution: "Reverb", "Limiter": "Dynamics", "CatLive Trigger": "Trigger", "Cat Gate": "Dynamics",
         "Chorus": "Modulation", "Phaser": "Modulation", "Amp": "Distortion", "Soft Clipper": "Dynamics", "Gate Divisor": "Dynamics", "Arpeggiator": "MIDI", "Drummer Pad 16": "Instrument", "Drummer Pad 48": "Instrument", "CatSynth": "Instrument", "EQ - 31 Band": "EQ"
     ]
@@ -1274,11 +1279,11 @@ struct WorkspaceLibrary: View {
     #if os(macOS)
     @ObservedObject private var plugins = PluginCatalog.shared
     #endif
-    @AppStorage(LibraryNote.storageKey, store: WorkspaceLayoutPreferences.storage) private var storedNotes = Data()
-    @AppStorage("jaras.library.samplerCategories", store: WorkspaceLayoutPreferences.storage) private var storedSamplerCategories = Data()
-    @AppStorage("jaras.library.midiCategories", store: WorkspaceLayoutPreferences.storage) private var storedMIDICategories = Data()
-    @AppStorage("jaras.library.favorites", store: WorkspaceLayoutPreferences.storage) private var storedFavorites = Data()
-    @AppStorage("jaras.library.samplerPreviewDB", store: WorkspaceLayoutPreferences.storage) private var samplerPreviewDB = 0.0
+    @WorkspacePreference(LibraryNote.storageKey, store: WorkspaceLayoutPreferences.storage) private var storedNotes = Data()
+    @WorkspacePreference("jaras.library.samplerCategories", store: WorkspaceLayoutPreferences.storage) private var storedSamplerCategories = Data()
+    @WorkspacePreference("jaras.library.midiCategories", store: WorkspaceLayoutPreferences.storage) private var storedMIDICategories = Data()
+    @WorkspacePreference("jaras.library.favorites", store: WorkspaceLayoutPreferences.storage) private var storedFavorites = Data()
+    @WorkspacePreference("jaras.library.samplerPreviewDB", store: WorkspaceLayoutPreferences.storage) private var samplerPreviewDB = 0.0
     @State private var instrumentsExpanded = false
     @State private var pluginsExpanded = false
     @State private var samplersExpanded = false
@@ -1338,20 +1343,30 @@ struct WorkspaceLibrary: View {
     static func mixerPluginGroups() -> [PluginGroup] {
         #if os(macOS)
         let catalog = PluginCatalog.shared
-        let externalTypes = catalog.plugins.flatMap(\.types)
+        let plugins = catalog.matchingPlugins(query: "", type: "", vendor: "", allowsInstruments: true)
+        typealias Entry = (identity: String, name: String)
+        var allExternal: [Entry] = []
+        var externalByType: [String: [Entry]] = [:]
+        for plugin in plugins {
+            let entry = (identity: "vst3:" + plugin.classID, name: plugin.name)
+            allExternal.append(entry)
+            for type in Set(plugin.types) { externalByType[type, default: []].append(entry) }
+        }
+        let externalTypes = Array(externalByType.keys)
         #else
         let externalTypes: [String] = []
         #endif
         return (["All", "Native"] + pluginTypes(externalTypes: externalTypes)).map { title in
-            var entries = NativeFXSettings.order.compactMap { name -> (identity: String, name: String)? in
+            var entries = (NativeFXSettings.order + [NativeFXSettings.waveLFOName]).compactMap { name -> (identity: String, name: String)? in
                 guard let type = nativeTypes[name], title == "All" || title == "Native" || title == type else { return nil }
                 return ("native:" + name, name == "Limiter" ? "CatLive Limiter" : name)
             }
             #if os(macOS)
-            if title != "Native" {
-                entries += catalog.matchingPlugins(query: "", type: title == "All" ? "" : title, vendor: "", allowsInstruments: true)
+            if title == "All" { entries += allExternal }
+            else if title == PluginCatalog.favoritesType {
+                entries += plugins.filter(catalog.isFavorite)
                     .map { ("vst3:" + $0.classID, $0.name) }
-            }
+            } else if title != "Native" { entries += externalByType[title] ?? [] }
             #endif
             return PluginGroup(title: title, entries: entries)
         }
@@ -1544,16 +1559,17 @@ struct WorkspaceLibrary: View {
         .background(theme.mixerPanelBackground)
         .foregroundStyle(JarasTheme.text)
         .accessibilityIdentifier("workspace-library-panel")
-        .onAppear {
+        // Prepare each catalog when its folder is visible. Opening a collapsed
+        // Library during playback should only mount its navigation controls.
+        .task(id: samplersOnly || samplersExpanded) {
+            guard samplersOnly || samplersExpanded else { return }
             refreshPadSamples()
-            if samplersOnly {
-                if selection == nil {
-                    selection = samplerPickerEntries.first?.target
-                }
-            } else {
-                instruments.refresh(); loadPresets()
+            if samplersOnly && selection == nil {
+                selection = samplerPickerEntries.first?.target
             }
         }
+        .task(id: instrumentsExpanded) { if instrumentsExpanded { instruments.refresh() } }
+        .task(id: presetsExpanded) { if presetsExpanded { loadPresets() } }
         .onReceive(show.libraryTimelineSelection.openedPane) { pane in
             if pane == .dock && (selection == .regions || selection == .markers) { selection = nil }
         }
@@ -1913,7 +1929,7 @@ struct WorkspaceLibrary: View {
         let external = type == "Native" ? [] : plugins.matchingPlugins(query: "", type: favoritesOnly ? PluginCatalog.favoritesType : type ?? "",
                                                vendor: "", allowsInstruments: true).filter { matchesSearch($0.name) }
         #endif
-        let native = NativeFXSettings.order.filter {
+        let native = (NativeFXSettings.order + [NativeFXSettings.waveLFOName]).filter {
             guard let category = Self.nativeTypes[$0], matchesSearch(pluginName("native:" + $0)) else { return false }
             if favoritesOnly { return favoriteKeys.contains("native:" + $0) }
             return type == nil || type == "Native" || category == type
@@ -1939,14 +1955,15 @@ struct WorkspaceLibrary: View {
     private func pluginRow(_ name: String, identity: String, shaded: Bool, favorite: Bool,
                            format: String, toggle: @escaping () -> Void) -> some View {
         HStack(spacing: 5) {
-            entryName(name, icon: "puzzlepiece.extension")
-                .contentShape(Rectangle())
-                .modifier(effectDrag(name, identity: identity))
-            Text(verbatim: format)
-                .font(.jarasSystem(size: 9, weight: .semibold))
-                .foregroundStyle(format == "ARA2" ? JarasTheme.green : theme.secondary)
-                .fixedSize().padding(.horizontal, 4).padding(.vertical, 2)
-                .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 3))
+            HStack(spacing: 5) {
+                entryName(name, icon: "puzzlepiece.extension")
+                Text(verbatim: format)
+                    .font(.jarasSystem(size: 9, weight: .semibold))
+                    .foregroundStyle(format == "ARA2" ? JarasTheme.green : theme.secondary)
+                    .fixedSize().padding(.horizontal, 4).padding(.vertical, 2)
+                    .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 3))
+            }
+            .modifier(effectDrag(name, identity: identity))
             favoriteButton(favorite, action: toggle)
         }
             .padding(.horizontal, 6).frame(height: 27)
@@ -2142,7 +2159,8 @@ struct WorkspaceLibrary: View {
                         }
                         .padding(.horizontal, 8).frame(height: 27)
                         .contentShape(Rectangle())
-                        .onDrag { NSItemProvider(object: url as NSURL) }
+                        .modifier(LibraryRowDrag(title: url.deletingPathExtension().lastPathComponent, type: .fileURL,
+                            data: { url.dataRepresentation }, provider: { NSItemProvider(object: url as NSURL) }))
                     }
                 }
             }
@@ -2277,7 +2295,11 @@ struct WorkspaceLibrary: View {
     }
 
     private func refreshPadSamples() {
-        hasPadSamples = !padSamplers().isEmpty
+        let files = try? FileManager.default.contentsOfDirectory(at: VinhetasController.shared.padSampleDirectory,
+            includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles])
+        hasPadSamples = files?.contains {
+            VinhetasPad.accepts($0) && (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
+        } ?? false
         if !hasPadSamples && selection == .padSamplers { selection = nil }
         if selection == .padSamplers || selection == .favoriteSamplers { loadSamplers() }
     }
@@ -2529,7 +2551,14 @@ struct WorkspaceLibrary: View {
                 let parts = identity.dropFirst(7).split(separator: ":", maxSplits: 1)
                 guard let rawKind = parts.first else { return nil }
                 let kind = String(rawKind)
-                guard NativeFXSettings.order.contains(kind) else { return nil }
+                if kind == NativeFXSettings.waveLFOName {
+                    if let clip {
+                        guard let owner = show.current?.tracks.first(where: { $0.clips.contains { $0.id == clip } }),
+                              owner.kind == .standard, let item = owner.clips.first(where: { $0.id == clip }),
+                              !item.isImage, item.midi == nil, (item.audioFile ?? owner.audioFile) != nil else { return nil }
+                    } else if track == nil { return nil }
+                    if original.inserted.contains(kind), presetID == nil { return kind }
+                } else if !NativeFXSettings.order.contains(kind) { return nil }
                 if kind == "Instruments" {
                     guard parts.count == 2, !isVinhetas(track, show: show) else { return nil }
                     let instrument = String(parts[1])
@@ -2555,7 +2584,7 @@ struct WorkspaceLibrary: View {
                 return nil
                 #endif
             }
-            guard !original.inserted.contains(key) else { return nil }
+            guard !original.inserted.contains(key) || key == NativeFXSettings.waveLFOName else { return nil }
             let library = try FXPresetStore.shared.read()
             if let presetID {
                 guard let preset = library.presets.first(where: { $0.id == presetID }) else { throw ProjectError.invalid("Preset not found for this plugin") }
@@ -2563,7 +2592,7 @@ struct WorkspaceLibrary: View {
             } else {
                 settings = try library.applyingDefault(to: settings, effect: key)
             }
-            if let target, let index = original.inserted.firstIndex(of: target) {
+            if key != NativeFXSettings.waveLFOName, let target, let index = original.inserted.firstIndex(of: target) {
                 settings.inserted.removeAll { $0 == key }
                 settings.inserted.insert(key, at: index)
             }
@@ -2618,8 +2647,15 @@ struct WorkspaceLibrary: View {
     @State private var entries: [Entry] = []
     @State private var songID: UUID?
     @State private var editing: UUID?
-    @State private var draft = ""
-    @State private var original = ""
+    private final class RenameDraft {
+        var original = ""
+        var text = ""
+    }
+    // AppKit and UIKit maintain the field editor. Typing does not invalidate the list.
+    @State private var draft = RenameDraft()
+    private var nameBinding: Binding<String> {
+        Binding(get: { draft.text }, set: { draft.text = $0 })
+    }
 
     init(show: ShowController, regions: Bool, docked: Bool) {
         self.show = show; self.regions = regions; self.docked = docked
@@ -2638,8 +2674,9 @@ struct WorkspaceLibrary: View {
         if regions {
             values = song.parts.map { Entry(id: $0.id, name: $0.name, label: $0.displayName, position: $0.startTime) }
         } else {
+            let parts = Dictionary(uniqueKeysWithValues: song.parts.map { ($0.id, $0) })
             values = (song.markers ?? []).filter(\.isNavigationMarker).map { marker in
-                let source = marker.sourceRegionID.flatMap { id in song.parts.first { $0.id == id } }
+                let source = marker.sourceRegionID.flatMap { parts[$0] }
                 return Entry(id: marker.id, name: source?.name ?? marker.name,
                              label: source?.displayName ?? marker.name, position: marker.position)
             }
@@ -2732,7 +2769,7 @@ struct WorkspaceLibrary: View {
         let next = rows[nextIndex]
         if let editing {
             commitDraft(editing)
-            original = next.name; draft = next.name; self.editing = next.id
+            draft.original = next.name; draft.text = next.name; self.editing = next.id
         }
         show.browseLibraryTimelineEntry(next.id, region: regions, commitAfterDelay: !keyboardTarget.holdingArrow)
         return true
@@ -2780,13 +2817,13 @@ struct WorkspaceLibrary: View {
         #else
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         #endif
-        show.selectLibraryTimelineEntry(row.id, region: regions, includesUnified: true)
+        show.clickLibraryTimelineEntry(row.id, region: regions)
     }
 
     private func begin(_ row: Entry) {
         if let editing, editing != row.id { finish(editing) }
         guard show.canControl() else { return }
-        original = row.name; draft = row.name; editing = row.id
+        draft.original = row.name; draft.text = row.name; editing = row.id
     }
 
     private func finish(_ id: UUID, save: Bool = true) {
@@ -2796,7 +2833,7 @@ struct WorkspaceLibrary: View {
     }
 
     private func commitDraft(_ id: UUID) {
-        if draft != original { show.renameTimelineLabel(id, name: draft, region: regions, includesUnified: true) }
+        if draft.text != draft.original { show.renameTimelineLabel(id, name: draft.text, region: regions, includesUnified: true) }
     }
 
     private func nameInput(for row: Entry, rows: [Entry]) -> some View {
@@ -2805,9 +2842,9 @@ struct WorkspaceLibrary: View {
             _ = step(direction, in: rows)
         }
         #if os(macOS)
-        return LibraryTimelineNameInput(text: $draft, keyboardTarget: keyboardTarget, finish: { finish(row.id, save: $0) }, move: move)
+        return LibraryTimelineNameInput(text: nameBinding, keyboardTarget: keyboardTarget, finish: { finish(row.id, save: $0) }, move: move)
         #else
-        return InlineNameInput(text: $draft, compact: false, finish: { finish(row.id) }, move: move,
+        return InlineNameInput(text: nameBinding, compact: false, finish: { finish(row.id) }, move: move,
                         accessibilityName: regions ? "Region name" : "Marker name")
         #endif
     }

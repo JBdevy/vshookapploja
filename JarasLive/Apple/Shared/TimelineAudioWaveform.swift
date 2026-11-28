@@ -95,6 +95,7 @@ final class TimelineAudioWaveform: ObservableObject {
     static let blockFrames = 65_536
     static let peakFramesPerInterval = 256
     static func diskCacheURL(_ url: URL) -> URL { WaveformSource.cacheURL(url) }
+    static func hasCurrentPeakFile(_ url: URL) -> Bool { WaveformSource.hasCurrentPeakFile(url) }
     @Published private(set) var revision: UInt64 = 0
     @Published private(set) var preparingSourcePaths = Set<String>()
     private var failedSourceKeys: [String: TimeInterval] = [:]
@@ -685,7 +686,7 @@ final class TimelineAudioWaveform: ObservableObject {
                     // previous audio's cached header at the same path.
                     headers.setObject(header, forKey: url.path as NSString)
                     guard let prefix = header.cachePrefix, let identity = header.vertexSource,
-                          let source = try? (pinnedSource(identity) ?? WaveformSource.loadOrBuild(url, header: header, buildIfMissing: !cachedOnly, cancelled: cancelled)),
+                          let source = try? (pinnedSource(identity) ?? WaveformSource.loadOrBuild(url, header: header, buildIfMissing: !cachedOnly || LinkedStemMedia.shared.waveform(inSourceFolderOf: url) != nil, cancelled: cancelled)),
                           let overview = prepareZoomOutVertices(source, header: header, prefix: prefix, overviewPixels: overviewPixels) else { return nil }
                     sources.setObject(source, forKey: prefix as NSString, cost: source.cost)
                     return (url, header, overview, source)
@@ -1496,7 +1497,7 @@ final class TimelineAudioWaveform: ObservableObject {
     static func clickOnsets(_ url: URL) throws -> [Double] {
         try clickTransients(url).map(\.position)
     }
-    static func clickTransients(_ url: URL) throws -> [(position: Double, peak: Double, shape: [Double])] {
+    static func clickTransients(_ url: URL, cancelled: () -> Bool = { false }) throws -> [(position: Double, peak: Double, shape: [Double])] {
         let file = try AVAudioFile(forReading: url)
         let header = Header(rate: file.processingFormat.sampleRate, frames: file.length, channels: Int(file.processingFormat.channelCount))
         let source = try WaveformSource.loadOrBuild(url, header: header)
@@ -1512,7 +1513,10 @@ final class TimelineAudioWaveform: ObservableObject {
         let capacity = WaveformSource.baseStep * 2 + Int(ceil(header.rate * 0.03))
         let pcm = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(capacity))!
         for (index, peak) in peaks.enumerated() {
-            if index % 4096 == 0 { try Task.checkCancellation() }
+            if index % 1024 == 0 {
+                try Task.checkCancellation()
+                if cancelled() { throw CancellationError() }
+            }
             if peak < threshold * 0.3 { armed = true }
             guard armed, peak >= threshold else { continue }
             armed = false
@@ -1803,6 +1807,7 @@ private final class WaveformSource: NSObject {
             channels: channels, levels: Array(entries.dropFirst()), mapping: mapping)
     }
     static func cacheURL(_ url: URL) -> URL {
+        if let sidecar = LinkedStemMedia.shared.waveform(inSourceFolderOf: url) { return sidecar }
         let directory = url.deletingLastPathComponent()
         var ancestor = directory
         while ancestor.path != "/" {
@@ -1816,6 +1821,20 @@ private final class WaveformSource: NSObject {
         return directory.appendingPathComponent("Stems", isDirectory: true).appendingPathComponent("WF", isDirectory: true)
             .appendingPathComponent(url.lastPathComponent + ".waveform")
     }
+    static func hasCurrentPeakFile(_ url: URL) -> Bool {
+        autoreleasepool {
+            let destination = cacheURL(url)
+            guard FileManager.default.fileExists(atPath: destination.path),
+                  let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+                  let size = (attributes[.size] as? NSNumber)?.int64Value,
+                  let modified = (attributes[.modificationDate] as? Date)?.timeIntervalSinceReferenceDate,
+                  let audio = try? AVAudioFile(forReading: url) else { return false }
+            let header = TimelineAudioWaveform.Header(rate: audio.processingFormat.sampleRate,
+                frames: audio.length, channels: Int(audio.processingFormat.channelCount))
+            return mapped(destination, header: header, size: size, modified: modified) != nil
+        }
+    }
+
     static func loadOrBuild(_ url: URL, header: TimelineAudioWaveform.Header, buildIfMissing: Bool = true, cancelled: () -> Bool = { false }) throws -> WaveformSource {
         if cancelled() { throw CancellationError() }
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)

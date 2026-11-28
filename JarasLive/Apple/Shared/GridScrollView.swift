@@ -80,10 +80,11 @@ struct GridScrollView<Content: View>: View {
     var rowReveal: GridRowReveal? = nil
     var fileDrop: (([URL], CGPoint) -> Bool)? = nil
     var fileDropPreview: (([URL], CGPoint?) -> Void)? = nil
+    var libraryEffectDrop: ((Data, CGPoint, Bool) -> Bool)? = nil
     @ViewBuilder let content: () -> Content
     var body: some View {
         #if os(macOS)
-        NativeGridScroll(horizontal: axis == .horizontal, contentWidth: contentWidth, contentHeight: contentHeight, viewportWidth: viewportWidth, trackHeight: trackHeight, timelineVerticalBarTop: timelineVerticalBarTop, rowHeights: rowHeights, selectedRow: selectedRow, rowReveal: rowReveal, fileDrop: fileDrop, fileDropPreview: fileDropPreview, content: content())
+        NativeGridScroll(horizontal: axis == .horizontal, contentWidth: contentWidth, contentHeight: contentHeight, viewportWidth: viewportWidth, trackHeight: trackHeight, timelineVerticalBarTop: timelineVerticalBarTop, rowHeights: rowHeights, selectedRow: selectedRow, rowReveal: rowReveal, fileDrop: fileDrop, fileDropPreview: fileDropPreview, libraryEffectDrop: libraryEffectDrop, content: content())
         #else
         ScrollView(axis, showsIndicators: false, content: content)
         #endif
@@ -730,7 +731,13 @@ private final class WorkspaceHostingView<Content: View>: NSHostingView<Content>,
         rootView = content
     }
     override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); laidOutBounds = nil }
-    override func viewDidUnhide() { super.viewDidUnhide(); laidOutBounds = nil; needsLayout = true }
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        // The mixer column already tracks its row band, bounds and model revision.
+        // Reopening at the same width can reuse the layout of its mounted rows.
+        if !retainsSidebarViewportLayout { laidOutBounds = nil }
+        needsLayout = true
+    }
     override func hitTest(_ point: NSPoint) -> NSView? {
         // NSHostingView on Ventura updates its SwiftUI graph before rejecting
         // an outside point. Reject other rows/panes before entering that graph.
@@ -1330,16 +1337,20 @@ private final class WorkspaceSplitView<Leading: View, Trailing: View>: NSView, T
                               width: barWidth, height: available.height)
         let rightFrame = CGRect(x: sidebarLeading ? 0 : primaryWidth + barWidth, y: 0,
                                 width: mountedWidth, height: hostedHeight)
-        if leading.frame != leftFrame {
+        if leading.frame.size != leftFrame.size {
             leading.layoutProfile?.sizeChanged(leading, from: leading.frame.size, to: leftFrame.size)
             leading.frame = leftFrame
             leading.needsLayout = true
+        } else if leading.frame.origin != leftFrame.origin {
+            leading.setFrameOrigin(leftFrame.origin)
         }
         if divider.frame != barFrame { divider.frame = barFrame }
-        if trailing.frame != rightFrame {
+        if trailing.frame.size != rightFrame.size {
             trailing.layoutProfile?.sizeChanged(trailing, from: trailing.frame.size, to: rightFrame.size)
             trailing.frame = rightFrame
             trailing.needsLayout = true
+        } else if trailing.frame.origin != rightFrame.origin {
+            trailing.setFrameOrigin(rightFrame.origin)
         }
         let hidesSetlist = visibleWidth <= 0
         if trailing.isHidden != hidesSetlist { trailing.isHidden = hidesSetlist }
@@ -1595,14 +1606,22 @@ private final class TimelineMixerBackingView: NSView {
 private final class TimelineColumnsNativeView<Mixer: View, Divider: View, Timeline: View, Identity: Equatable>: NSView, NativeTimelineBodyInputHost, NativeTimelineMixerWidthTarget, TimelineMixerLibraryDropHost {
     weak var libraryDropRows: TimelineMixerLibraryDropRows?
     weak var timelineBodyInput: (NSView & NativeTimelineBodyInput)?
+    private func libraryGrid(at windowPoint: NSPoint) -> GridNativeScrollView? {
+        guard timelineHost.visibleRect.contains(timelineHost.convert(windowPoint, from: nil)),
+              let grid = timelineBodyInput?.enclosingScrollView as? GridNativeScrollView,
+              grid.libraryEffectDrop != nil, !grid.isHiddenOrHasHiddenAncestor else { return nil }
+        return grid
+    }
     // Keep the drag target outside the individual hosting views. AppKit can
     // hit a row's native control directly, including recycled row controls.
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        libraryDropRows?.libraryDropOperation(sender) ?? []
+        if let grid = libraryGrid(at: sender.draggingLocation) { return grid.draggingEntered(sender) }
+        return libraryDropRows?.libraryDropOperation(sender) ?? []
     }
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { draggingEntered(sender) }
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        libraryDropRows?.acceptLibraryDrop(sender) ?? false
+        if let grid = libraryGrid(at: sender.draggingLocation) { return grid.performDragOperation(sender) }
+        return libraryDropRows?.acceptLibraryDrop(sender) ?? false
     }
     override func hitTest(_ point: NSPoint) -> NSView? {
         timelineBodyHit(at: point) ?? timelineControlHit(at: point) ?? super.hitTest(point)
@@ -1746,6 +1765,7 @@ private struct NativeGridScroll<Content: View>: NSViewRepresentable {
     var rowReveal: GridRowReveal? = nil
     let fileDrop: (([URL], CGPoint) -> Bool)?
     let fileDropPreview: (([URL], CGPoint?) -> Void)?
+    let libraryEffectDrop: ((Data, CGPoint, Bool) -> Bool)?
     let content: Content
     @Environment(\.openFX) private var openFX
     @Environment(\.openClipFXChain) private var openClipFXChain
@@ -1782,11 +1802,12 @@ private struct NativeGridScroll<Content: View>: NSViewRepresentable {
         scroll.wantsLayer = true
         scroll.contentView = TimelineClipView(leadingSpace: horizontal ? TimelineAppearanceDefaults.leadingSpace : 0)
         if horizontal {
-            scroll.registerForDraggedTypes([.fileURL, NSPasteboard.PasteboardType(LibrarySamplerTransfer.type.identifier)])
+            scroll.registerForDraggedTypes([.fileURL, NSPasteboard.PasteboardType(LibrarySamplerTransfer.type.identifier), NativeLibraryTrackDrop.type])
             SidebarScrollController.registerTimelineWheelClip(scroll.contentView)
         }
         scroll.fileDrop = fileDrop
         scroll.fileDropPreview = fileDropPreview
+        scroll.libraryEffectDrop = libraryEffectDrop
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
         scroll.automaticallyAdjustsContentInsets = false
@@ -1829,6 +1850,7 @@ private struct NativeGridScroll<Content: View>: NSViewRepresentable {
         defer { CATransaction.commit() }
         scroll.fileDrop = fileDrop
         scroll.fileDropPreview = fileDropPreview
+        scroll.libraryEffectDrop = libraryEffectDrop
         if let trackHeight, let anchoredY = scroll.trackHeightOffset(height: trackHeight, rows: rowHeights, selected: selectedRow) {
             scroll.prepareTrackHeightAnchor(to: anchoredY, height: trackHeight)
         }
@@ -2414,6 +2436,7 @@ final class GridNativeScrollView: NSScrollView, NativeTimelineBodyInputHost, Nat
     }
     var fileDrop: (([URL], CGPoint) -> Bool)?
     var fileDropPreview: (([URL], CGPoint?) -> Void)?
+    var libraryEffectDrop: ((Data, CGPoint, Bool) -> Bool)?
     var fileDropModifierFlags: () -> NSEvent.ModifierFlags = { NSEvent.modifierFlags }
     private var fileDropURLs: [URL] = []
     private var fileDropPasteboardChange: Int?
@@ -2436,9 +2459,19 @@ final class GridNativeScrollView: NSScrollView, NativeTimelineBodyInputHost, Nat
     private func fileURLs(from pasteboard: NSPasteboard) -> [URL] {
         let sampleType = NSPasteboard.PasteboardType(LibrarySamplerTransfer.type.identifier)
         if let sample = LibrarySamplerTransfer.url(pasteboard.data(forType: sampleType)) { return [sample] }
-        return pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+        let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+        return urls.filter(GridMediaFileFilter.accepts)
+    }
+    private func libraryEffect(_ sender: NSDraggingInfo, perform: Bool) -> Bool? {
+        guard sender.draggingPasteboard.types?.contains(NativeLibraryTrackDrop.type) == true else { return nil }
+        guard let documentView, let libraryEffectDrop, let window,
+              !NativeTimelineInputGate.shared.isBlocked(window), window.attachedSheet == nil,
+              sender.draggingSourceOperationMask.contains(.copy),
+              let data = sender.draggingPasteboard.data(forType: NativeLibraryTrackDrop.type) else { return false }
+        return libraryEffectDrop(data, documentView.convert(sender.draggingLocation, from: nil), perform)
     }
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if let accepted = libraryEffect(sender, perform: false) { return accepted ? .copy : [] }
         guard fileDrop != nil, let documentView,
               sender.draggingSourceOperationMask.contains(.copy) else {
             updateFileDropPreview(nil)
@@ -2468,6 +2501,11 @@ final class GridNativeScrollView: NSScrollView, NativeTimelineBodyInputHost, Nat
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         acceptedFileDrop = false
         defer { updateFileDropPreview(nil) }
+        if let accepted = libraryEffect(sender, perform: true) {
+            acceptedFileDrop = accepted
+            restoreFileDropFocus()
+            return accepted
+        }
         guard let documentView, let fileDrop, sender.draggingSourceOperationMask.contains(.copy) else { return false }
         let urls = fileURLs(from: sender.draggingPasteboard)
         guard !urls.isEmpty else { return false }
@@ -2678,6 +2716,8 @@ final class NativeTimelinePinnedView: NSView {
     var hostHandlesInput = false
     var host: NSView?
     var pinHorizontally = false
+    var horizontalTileStep: CGFloat = 0
+    var hostOriginChanged: (() -> Void)?
     private weak var clip: NSClipView?
     private weak var horizontalClip: NSClipView?
     private var observer: NSObjectProtocol?
@@ -2727,11 +2767,14 @@ final class NativeTimelinePinnedView: NSView {
     }
     private func pin() {
         guard let host, let clip else { return }
-        let origin = NSPoint(x: max(0, horizontalClip?.bounds.minX ?? 0), y: max(0, clip.bounds.minY))
+        let left = max(0, horizontalClip?.bounds.minX ?? 0)
+        let x = horizontalTileStep > 0 ? floor(left / horizontalTileStep) * horizontalTileStep : left
+        let origin = NSPoint(x: x, y: max(0, clip.bounds.minY))
         guard host.frame.origin != origin else { return }
         // Direct AppKit positioning is immediate. A separate CA commit for
         // every scroll sample can flush the entire window between display frames.
         host.setFrameOrigin(origin)
+        hostOriginChanged?()
     }
     deinit {
         if let observer { NotificationCenter.default.removeObserver(observer) }

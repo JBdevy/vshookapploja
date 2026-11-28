@@ -380,12 +380,13 @@ private final class SourcePlayer: @unchecked Sendable {
     private(set) var vuLevel = -20.0
     private var vuAmplitude = 0.0
     private var vuVelocity = 0.0
+    private var displayedVU = -20.0
 
     func updateVU(meanMagnitude: Double, elapsed: Double) {
         guard elapsed.isFinite, elapsed > 0 else { return }
         let input = meanMagnitude.isFinite ? max(0, meanMagnitude) : 0
         // The rectified 1 kHz reference is -18 dBFS. The damped pointer reaches
-        // 99% in 300 ms with 1.25% overshoot; the same movement applies on decay.
+        // 99% in 300 ms with 1.25% overshoot on attack.
         let damping = 10.981360858709374, frequency = 7.872832704200884
         let phase = frequency * elapsed
         let cosine = cos(phase), sine = sin(phase) / frequency
@@ -395,7 +396,9 @@ private final class SourcePlayer: @unchecked Sendable {
         vuVelocity = decay * (vuVelocity * (cosine - damping * sine)
             - error * (damping * damping + frequency * frequency) * sine)
         let reference = 0.08014568090841664
-        let next = (min(3, max(-20, 20 * log10(max(0.000001, vuAmplitude) / reference))) * 10).rounded() / 10
+        let target = min(3, max(-20, 20 * log10(max(0.000001, vuAmplitude) / reference)))
+        displayedVU = max(target, displayedVU - 20 / Self.releaseSeconds * elapsed)
+        let next = (displayedVU * 10).rounded() / 10
         if next != vuLevel { vuLevel = next; vuSignal.send(next) }
     }
     @Published private(set) var levels = SIMD2<Double>(repeating: 0)
@@ -405,12 +408,13 @@ private final class SourcePlayer: @unchecked Sendable {
         let next = db.map { (min(24, max(0, $0)) * 10).rounded() / 10 }
         if gainReduction != next { gainReduction = next }
     }
-    // Instant attack and a 60 dB fall over 1.5 s. The numeric peak stays independent.
-    static let releaseDecibelsPerSecond = 40.0
+    // A full-scale bar reaches its visible floor at -60 dB in three seconds.
+    static let releaseSeconds = 3.0
+    static let releaseDecibelsPerSecond = 60 / releaseSeconds
     private var envelope = SIMD2<Double>(repeating: 0)
     func reset() {
         envelope = .zero; if levels != .zero { levels = .zero }
-        vuAmplitude = 0; vuVelocity = 0
+        vuAmplitude = 0; vuVelocity = 0; displayedVU = -20
         if vuLevel != -20 { vuLevel = -20; vuSignal.send(vuLevel) }
     }
     func update(peak: Double, elapsed: Double) { update(left: peak, right: peak, elapsed: elapsed) }
@@ -1010,6 +1014,13 @@ struct TimecodePlaybackSpan {
     // and reschedule PCM; graph ownership changes on project/device teardown.
     private var pitchClipRevision: UInt64?
     private var pitchParts: [Part] = []
+    // Linked items on different tracks often share this range. Region ownership
+    // uses the whole source range even when tempo markers split it for playback.
+    private struct PitchRange: Hashable {
+        let start: Double
+        let end: Double
+        let preferred: UUID?
+    }
     private var clipPitches: [UUID: Float] = [:]
     private var suspendedVoiceOutputs = Set<ObjectIdentifier>()
     private var idleVoices: [UUID: [Voice]] = [:]
@@ -1794,7 +1805,7 @@ struct TimecodePlaybackSpan {
         let media: [[String: Any]] = sources.compactMap { item in
             guard let file = item.audioFile, !item.isProjectionMedia, item.midi == nil else { return nil }
             return ["id": item.id.uuidString, "name": item.name, "path": file.path,
-                    "file": directory.appendingPathComponent(file.path).path, "start": item.startTime,
+                    "file": directory.projectMedia(file.path).path, "start": item.startTime,
                     "duration": item.duration, "offset": item.sourceOffset, "rate": item.audioRate]
         }
         let activeSong = latestPlayback?.snapshot.project.songs.first { $0.id == latestPlayback?.snapshot.transport.songId }
@@ -2159,20 +2170,25 @@ struct TimecodePlaybackSpan {
         var preferredRate: Double?
         #if os(macOS)
         if bufferedOutput != nil {
-            let media = project.songs.flatMap(\.tracks).flatMap(\.clips).compactMap { clip -> String? in
-                guard !clip.isImage, let path = clip.audioFile?.path, !unreadableAudioPaths.contains(path) else { return nil }
-                return path
+            var uses: [String: Int] = [:]
+            for song in project.songs {
+                for track in song.tracks {
+                    for clip in track.clips where !clip.isImage {
+                        guard let path = clip.audioFile?.path, !unreadableAudioPaths.contains(path) else { continue }
+                        uses[path, default: 0] += 1
+                    }
+                }
             }
-            if media.count >= 256 {
-                preferredRate = try await AudioFileRead.prepare { cancelled in
-                    let uses = Dictionary(grouping: media, by: { $0 }).mapValues(\.count)
+            let mediaCount = uses.values.reduce(0, +)
+            if mediaCount >= 256 {
+                preferredRate = try await AudioFileRead.prepare { [uses] cancelled in
                     var counts: [Double: Int] = [:]
                     for (path, count) in uses {
                         if cancelled() { throw CancellationError() }
                         // This pass reads headers only. Playback/recovery owns
                         // reporting missing or unsupported media to the user.
                         try? autoreleasepool {
-                            let file = try AVAudioFile(forReading: directory.appendingPathComponent(path))
+                            let file = try AVAudioFile(forReading: directory.projectMedia(path))
                             let rate = file.processingFormat.sampleRate
                             if rate.isFinite && rate >= 8000 && rate <= 192000 { counts[rate, default: 0] += count }
                         }
@@ -2180,7 +2196,7 @@ struct TimecodePlaybackSpan {
                     // Mixed full-band material must never inherit a speech-
                     // quality clock from a majority of low-rate source files.
                     guard let choice = counts.max(by: { $0.value < $1.value }), choice.key >= 44100,
-                          choice.value * 4 >= media.count * 3 else { return nil }
+                          choice.value * 4 >= mediaCount * 3 else { return nil }
                     return choice.key
                 }
             }
@@ -2845,7 +2861,8 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
         #endif
         refreshGraphRendering()
         let active = transportWasRunning || instrumentRenderPending || !synthPreviews.isEmpty || !inputMonitors.isEmpty || hasPadPlayback
-            || masterMeter.level > 0 || meters.values.contains { $0.level > 0 }
+            || masterMeter.level > 0 || masterMeter.vuLevel > -20
+            || meters.values.contains { $0.level > 0 || $0.vuLevel > -20 }
         guard meterTimer == nil || meterTimerActive != active else { return }
         meterTimer?.invalidate()
         meterTimerActive = active
@@ -3180,7 +3197,7 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
     private func audioFile(_ audio: AudioFile) throws -> AVAudioFile {
         if let file = files.file(for: audio.path) { return file }
         guard let directory else { throw ProjectError.invalid("No project media directory") }
-        let file = try AudioFileRead.openMedia(directory.appendingPathComponent(audio.path))
+        let file = try AudioFileRead.openMedia(directory.projectMedia(audio.path))
         files.remember(file, for: audio.path)
         return file
     }
@@ -3211,26 +3228,37 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
         let prepared: JarasPreparedClip?
         let mixer: AVAudioMixerNode?
 
-        init(format: AVAudioFormat, timing: JarasPreparedClipTiming, preparedSource: Bool) {
+        init(format: AVAudioFormat, timing: JarasPreparedClipTiming, preparedSource: Bool,
+             outputSliceFrames: AVAudioFrameCount) {
             player = SourcePlayer(legacy: !preparedSource)
             gain = JarasVoiceGain.makeNode()
             stretch = preparedSource ? nil : AVAudioUnitTimePitch()
             rateClock = preparedSource ? nil : AVAudioUnitVarispeed()
             prepared = preparedSource ? JarasPreparedClip(format: format, timing: timing) : nil
             mixer = preparedSource ? AVAudioMixerNode() : nil
-            for node in ([player.node, stretch, rateClock, gain] as [AVAudioNode?]).compactMap({ $0 }) {
+            for node in ([player.node, stretch, rateClock] as [AVAudioNode?]).compactMap({ $0 }) {
                 node.auAudioUnit.maximumFramesToRender = 8192
             }
+            // Prepared items place this gate after conversion to the output rate.
+            // The manual render graph sets the largest block it can ever request.
+            gain.auAudioUnit.maximumFramesToRender = preparedSource ? outputSliceFrames : 8192
             player.volume = 0
             mixer?.outputVolume = 0
         }
+    }
+
+    private var voiceOutputSliceFrames: AVAudioFrameCount {
+        guard engine.isInManualRenderingMode else { return 8192 }
+        let limit = engine.manualRenderingMaximumFrameCount
+        return limit > 0 ? limit : 8192
     }
 
     private func makeVoice(track: UUID, clip: AudioClip, file: AVAudioFile, preparedPlaybackFile: AVAudioFile? = nil,
                            nodes: UnattachedVoice? = nil) throws -> Voice {
         let usesPreparedSource = preparedSourceEnabled && file.processingFormat.channelCount <= 2
         let playbackFile = try usesPreparedSource ? file : preparedPlaybackFile ?? AVAudioFile(forReading: file.url)
-        let parts = nodes ?? UnattachedVoice(format: file.processingFormat, timing: preparedTiming, preparedSource: usesPreparedSource)
+        let parts = nodes ?? UnattachedVoice(format: file.processingFormat, timing: preparedTiming,
+                                             preparedSource: usesPreparedSource, outputSliceFrames: voiceOutputSliceFrames)
         let player = parts.player, gain = parts.gain, stretch = parts.stretch, rateClock = parts.rateClock
         let pitch = clipPitches[clip.id] ?? 0
         let usesStretch = allowsTempoChanges || abs(clip.audioRate - 1) >= 0.000001 || abs(pitch) >= 0.000001
@@ -3435,6 +3463,37 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
                     }
                 }
             }
+            var batch: [(request: SourcePreparation, clip: AudioClip)] = []
+            // Each task owns a different reserved source. Limit concurrent disk
+            // reads while the outgoing head is playing and drain children before reuse.
+            let parallelism = min(4, max(1, ProcessInfo.processInfo.activeProcessorCount / 2))
+            @MainActor func finishBatch() async {
+                let work = batch
+                batch.removeAll(keepingCapacity: true)
+                await withTaskGroup(of: (Int, Result<Void, Error>).self) { group in
+                    for (index, entry) in work.enumerated() {
+                        let request = entry.request
+                        group.addTask(priority: .userInitiated) {
+                            (index, Result { try Task.checkCancellation(); try request.perform() })
+                        }
+                    }
+                    for await (index, result) in group {
+                        guard !Task.isCancelled, let self, destination.generation == generation,
+                              self.directory == directory, self.revision == revision else { continue }
+                        let entry = work[index]
+                        switch result {
+                        case .success:
+                            self.readySourcePreparations[ObjectIdentifier(entry.request.source)] = entry.request
+                        case .failure(let error):
+                            if let media = entry.clip.audioFile, !(error is CancellationError) {
+                                if entry.clip.isProjectionMedia && AudioFileRead.isVideoWithoutAudio(error) {
+                                    self.silentVideoFiles.insert(media.path)
+                                } else { try? self.handlePlaybackMediaFailure(error, audio: media) }
+                            }
+                        }
+                    }
+                }
+            }
             var yieldedAt = ProcessInfo.processInfo.systemUptime
             for (track, clip) in candidates {
                 // Voice reuse and graph attachment still belong to this
@@ -3451,7 +3510,7 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
                     let file: AVAudioFile
                     if let cached = self.files.file(for: path) { file = cached }
                     else {
-                        let url = directory.appendingPathComponent(path)
+                        let url = directory.projectMedia(path)
                         let opened = try await AudioFileRead.prepare { cancelled in
                             let reader = try AudioFileRead.openMedia(url, cancelled: cancelled)
                             return IdleMedia(file: reader, playbackFile: reader, first: 0, frames: 0)
@@ -3464,13 +3523,9 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
                     JarasVoiceGain.setRenderEnabled(voice.gain, enabled: false)
                     self.subplayReserved[generation, default: []].append(voice)
                     if let request = self.sourcePreparation(voice, position: position) {
-                        // Await the child even after cancellation: a reserved
-                        // source cannot return to the pool while its DSP changes.
                         self.readySourcePreparations[ObjectIdentifier(request.source)] = nil
-                        try await Task.detached(priority: .userInitiated) { try request.perform() }.value
-                        guard !Task.isCancelled, destination.generation == generation,
-                              self.directory == directory, self.revision == revision else { return }
-                        self.readySourcePreparations[ObjectIdentifier(request.source)] = request
+                        batch.append((request, clip))
+                        if batch.count == parallelism { await finishBatch() }
                     }
                 } catch {
                     guard !Task.isCancelled, destination.generation == generation,
@@ -3482,6 +3537,11 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
             }
             guard !Task.isCancelled, let self, destination.generation == generation,
                   self.directory == directory, self.revision == revision else { return }
+            if !batch.isEmpty {
+                await finishBatch()
+                guard !Task.isCancelled, destination.generation == generation,
+                      self.directory == directory, self.revision == revision else { return }
+            }
             destination.warmSources = Set((self.subplayReserved[generation] ?? []).compactMap {
                 $0.prepared.map(ObjectIdentifier.init)
             })
@@ -3565,7 +3625,7 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
                 for (_, clip) in candidates {
                     guard !clip.isProjectionMedia, let path = clip.audioFile?.path,
                           seen.insert(path).inserted, self.files.file(for: path) == nil else { continue }
-                    requests.append((path, directory.appendingPathComponent(path)))
+                    requests.append((path, directory.projectMedia(path)))
                     if requests.count == 64 { break }
                 }
                 if !requests.isEmpty {
@@ -3600,7 +3660,7 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
                     // Prepared sources only inspect this file's metadata. Keep
                     // one reference per media path; their PCM reader is shared
                     // separately. Legacy players still own mutable readers.
-                    let url = self.files.file(for: source.path)?.url ?? directory.appendingPathComponent(source.path)
+                    let url = self.files.file(for: source.path)?.url ?? directory.projectMedia(source.path)
                     let transportStart = self.realtime
                     let allowsPreparedSource = self.preparedSourceEnabled
                     let cachedFile = allowsPreparedSource ? self.files.file(for: source.path).flatMap {
@@ -3675,11 +3735,13 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
                         let format = file.processingFormat
                         let timing = self.preparedTiming
                         let preparedSource = allowsPreparedSource && format.channelCount <= 2
+                        let outputSliceFrames = self.voiceOutputSliceFrames
                         #if os(macOS)
                         let allocationStarted = logTiming ? ProcessInfo.processInfo.systemUptime : 0
                         #endif
                         let nodes = await Task.detached(priority: priority) {
-                            UnattachedVoice(format: format, timing: timing, preparedSource: preparedSource)
+                            UnattachedVoice(format: format, timing: timing, preparedSource: preparedSource,
+                                            outputSliceFrames: outputSliceFrames)
                         }.value
                         guard !Task.isCancelled, self.preparationGeneration == generation, self.preparationKey == key,
                               self.directory == directory, !self.transportWasRunning else { return }
@@ -3988,6 +4050,7 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
         }
     }
     private func applyNormalization(to voice: inout Voice) {
+        voice.effects?.trackWaveLFO = tracks[voice.track]?.fx?.activeWaveLFO
         voice.effects?.setOverlapEnvelope(overlapEnvelopes[voice.clip.id])
         voice.effects?.updateItemFade(voice.clip)
         voice.effects?.setSourceGain(voice.clip.normalizationGain ?? 1)
@@ -4024,6 +4087,9 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
                 if var tail = effectTails[key] { update(&tail.voice.clip); applyNormalization(to: &tail.voice); effectTails[key] = tail }
             }
         }
+    }
+    func previewWaveLFO(_ id: UUID, envelope: WaveLFOEnvelope) {
+        previewFade(id) { $0.fx?.waveLFO = envelope }
     }
     func previewItemFade(_ id: UUID, fadeIn: Bool, seconds: Double) {
         guard seconds.isFinite, seconds >= 0 else { return }
@@ -4158,6 +4224,17 @@ for sampler in samplers.values { engine.detach(sampler.node) }; samplers.removeA
             if previous.arpeggiatesMIDI != settings.arpeggiatesMIDI { releaseTrackMIDI(track) }
             if previous.midiArpeggio != settings.midiArpeggio { midiPlanRevision = nil }
             tracks[track]?.fx = settings
+            if previous.activeWaveLFO != settings.activeWaveLFO {
+                let envelope = settings.activeWaveLFO
+                for voice in voices.values where voice.track == track {
+                    voice.effects?.trackWaveLFO = envelope
+                    voice.effects?.updateItemFade(voice.clip)
+                }
+                for voice in idleVoices[track] ?? [] {
+                    voice.effects?.trackWaveLFO = envelope
+                    voice.effects?.updateItemFade(voice.clip)
+                }
+            }
             #if os(macOS)
             if let effects = trackBuses[track]?.effects { configureTrackARA(track, settings: settings, effects: effects) }
             #endif
@@ -5358,7 +5435,7 @@ for sampler in samplers.values { sampler.sequenceHead(Int32(head), position: 0, 
         }
         let soundChanged = clickSoundPath != track.clickSound?.path || clickSample == nil
         if soundChanged {
-            let url = track.clickSound.map { directory!.appendingPathComponent($0.path) }
+            let url = track.clickSound.map { directory!.projectMedia($0.path) }
             if let url, !FileManager.default.fileExists(atPath: url.path) {
                 clickSample = Data() // Opening with missing media keeps the custom click silent.
             } else { clickSample = try ClickAudioSample.load(sampleRate: hardwareFormat.sampleRate, url: url) }
@@ -5460,6 +5537,46 @@ for sampler in samplers.values { sampler.sequenceHead(Int32(head), position: 0, 
             loopStart: transport.loop.enabled ? transport.loop.start ?? 0 : 0, loopEnd: transport.loop.enabled ? transport.loop.end ?? 0 : 0,
             sampleTime: sample.map(Double.init) ?? .nan)
     }
+
+    private func updateClipPitches(_ song: Song) {
+        clipPitches.removeAll(keepingCapacity: true)
+        clipPitches.reserveCapacity(clips.count)
+        for (_, clip) in clips {
+            clipPitches[clip.id] = Float((clip.pitchSemitones ?? 0) * 100)
+        }
+
+        let pitched = song.parts.filter { $0.semitones != 0 }
+        guard !pitched.isEmpty else { return }
+        let hierarchy = TrackHierarchy(song.tracks)
+        var regionsByTrack: [UUID: [UUID: Int]] = [:]
+        for region in pitched {
+            let targets = song.pitchTargets(region)
+            var included = targets.tracks.union(targets.groups)
+            for group in targets.groups { included.formUnion(hierarchy.descendants(of: group)) }
+            for track in included { regionsByTrack[track, default: [:]][region.id] = region.semitones }
+        }
+
+        var owners: [PitchRange: UUID?] = [:]
+        for track in song.tracks where track.kind == .standard {
+            guard let regions = regionsByTrack[track.id] else { continue }
+            for source in track.clips where source.frozenMIDI != true && source.renderedTiming != true {
+                guard let fragments = clipFragments[source.id] else { continue }
+                let range = PitchRange(start: source.startTime, end: source.startTime + source.duration, preferred: source.regionOwnerID)
+                let owner: UUID?
+                if let cached = owners[range] {
+                    owner = cached
+                } else {
+                    owner = song.regionOwnerForMedia(at: range.start, end: range.end, preferred: range.preferred)
+                    owners.updateValue(owner, forKey: range)
+                }
+                guard let owner, let semitones = regions[owner] else { continue }
+                for fragment in fragments {
+                    clipPitches[fragment] = Float(((source.pitchSemitones ?? 0) + Double(semitones)) * 100)
+                }
+            }
+        }
+    }
+
     func update(_ snapshot: ShowSnapshot, revision: UInt64, sampledAt: Double = ProcessInfo.processInfo.systemUptime) throws {
         if snapshot.transport.subPlay.playing, subplayDestination.task == nil, subplayDestination.key != nil {
             subplayDestination.cancel()
@@ -5827,19 +5944,7 @@ for sampler in samplers.values { sampler.sequenceHead(Int32(head), position: 0, 
         if changedLoopGains.contains(MultiLoopTrack.masterID) { applyMasterGain() }
         if pitchParts != song.parts || pitchClipRevision != revision {
             pitchParts = song.parts; pitchClipRevision = revision
-            var sourceItems: [UUID: AudioClip] = [:]
-            for source in song.tracks.flatMap(\.clips) {
-                for fragment in clipFragments[source.id] ?? [source.id] { sourceItems[fragment] = source }
-            }
-            clipPitches = Dictionary(uniqueKeysWithValues: clips.map { track, clip in
-                let original = sourceItems[clip.id] ?? clip
-                let owner = song.regionOwnerForMedia(at: original.startTime, end: original.startTime + original.duration,
-                                                      preferred: original.regionOwnerID)
-                let region = song.parts.first(where: { $0.id == owner })
-                let semitones = (clip.pitchSemitones ?? 0) +
-                    (clip.frozenMIDI == true || clip.renderedTiming == true ? 0 : Double(song.pitch(for: track, region: region)))
-                return (clip.id, Float(semitones * 100))
-            })
+            updateClipPitches(song)
             #if os(macOS)
             araPlaybackBlocked = Set(clips.compactMap { track, clip in
                 (clipPitches[clip.id] ?? 0) != 0 || overlapEnvelopes[clip.id] != nil ? track : nil

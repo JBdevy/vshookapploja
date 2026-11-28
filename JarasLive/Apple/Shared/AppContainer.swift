@@ -254,6 +254,7 @@ enum AppStartupPresentation {
             show.audioFX = { audio.previewFX($0, settings: $1) }
             show.audioClipFX = { audio.previewClipFX($0, settings: $1) }
             show.audioClipFXBypass = { audio.previewClipFXBypass($0, bypassed: $1) }
+            show.audioItemWaveLFO = { audio.previewWaveLFO($0, envelope: $1) }
             show.audioItemFade = { audio.previewItemFade($0, fadeIn: $1, seconds: $2) }
             show.audioItemFadeShape = { audio.previewItemFadeShape($0, fadeIn: $1, curvature: $2, sCurve: $3) }
             show.audioItemPhase = { audio.previewItemPhase($0, inverted: $1) }
@@ -262,7 +263,7 @@ enum AppStartupPresentation {
             show.itemSourceInfo = { [weak audio] file in
                 let url: URL
                 if file.path.hasPrefix("/") { url = URL(fileURLWithPath: file.path) }
-                else if let directory = audio?.mediaDirectory { url = directory.appendingPathComponent(file.path) }
+                else if let directory = audio?.mediaDirectory { url = directory.projectMedia(file.path) }
                 else { return nil }
                 let header = TimelineAudioWaveform.shared.header(url)
                 return (url, header.flatMap { $0.rate > 0 ? Double($0.frames) / $0.rate : nil })
@@ -593,7 +594,7 @@ enum AppStartupPresentation {
                 protected.formUnion(project.projectAudio.activeMediaURLs)
                 if let directory = project.documents.currentURL?.deletingLastPathComponent() {
                     protected.formUnion(project.show.snapshot.project.mediaPaths.map {
-                        directory.appendingPathComponent($0).standardizedFileURL.resolvingSymlinksInPath()
+                        directory.projectMedia($0).standardizedFileURL.resolvingSymlinksInPath()
                     })
                 }
             }

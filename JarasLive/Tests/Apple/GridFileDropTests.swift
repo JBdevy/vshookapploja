@@ -1,6 +1,10 @@
 import AppKit
 import SwiftUI
 
+private enum NativeLibraryTrackDrop {
+    static let type = NSPasteboard.PasteboardType("com.catlive.library-effect")
+}
+
 // The standalone grid test does not load the application's FX editor module.
 private struct TestOpenFXKey: EnvironmentKey { static let defaultValue: (UUID?, String) -> Void = { _, _ in } }
 private struct TestOpenClipFXChainKey: EnvironmentKey { static let defaultValue: (UUID) -> Void = { _ in } }
@@ -94,6 +98,14 @@ expectClear { scroll.draggingEnded(drag) }
 expectClear { scroll.concludeDragOperation(drag) }
 expectClear { precondition(scroll.performDragOperation(drag)) }
 precondition(drops.count == 1 && drops[0].0 == urls && drops[0].1 == CGPoint(x: 320, y: 240), "the eventual import receives the same exact insertion coordinates")
+let unsupported = URL(fileURLWithPath: "/tmp/unhandled.catlive-unsupported")
+pasteboard.clearContents()
+precondition(pasteboard.writeObjects([urls[0], unsupported, urls[1]] as [NSURL]))
+expectClear { precondition(scroll.performDragOperation(drag)) }
+precondition(drops.count == 2 && drops[1].0 == urls)
+pasteboard.clearContents(); precondition(pasteboard.writeObjects([unsupported] as [NSURL]))
+precondition(scroll.draggingEntered(drag).isEmpty && !scroll.performDragOperation(drag) && drops.count == 2)
+pasteboard.clearContents(); precondition(pasteboard.writeObjects(urls as [NSURL]))
 let clearedCount = previews.count
 scroll.draggingExited(nil); scroll.concludeDragOperation(nil)
 precondition(previews.count == clearedCount, "duplicate clear events do not redraw")
@@ -153,6 +165,22 @@ precondition(finder.isKeyWindow, "rejected drops must not activate the destinati
 NativeTimelineInputGate.shared.setBlocked(true, for: window)
 precondition(!NativeTimelineKeyboardFocus.activate(window: window, responder: inner) && finder.isKeyWindow,
              "a modal or editor retains keyboard ownership")
+NativeTimelineInputGate.shared.setBlocked(false, for: window)
+let payload = Data(#"{"effect":"native:Wave LFO","library":true}"#.utf8)
+pasteboard.clearContents(); pasteboard.setData(payload, forType: NativeLibraryTrackDrop.type)
+var libraryDrops = 0
+inner.libraryEffectDrop = { data, point, perform in
+    precondition(data == payload && point == inner.documentView!.convert(drag.draggingLocation, from: nil))
+    if perform { libraryDrops += 1 }
+    return true
+}
+precondition(inner.draggingEntered(drag) == .copy && libraryDrops == 0)
+precondition(inner.performDragOperation(drag) && libraryDrops == 1 && window.isKeyWindow)
+finder.makeKeyAndOrderFront(nil)
+inner.concludeDragOperation(drag)
+precondition(window.isKeyWindow && window.firstResponder === window)
+NativeTimelineInputGate.shared.setBlocked(true, for: window)
+precondition(inner.draggingEntered(drag).isEmpty && !inner.performDragOperation(drag) && libraryDrops == 1)
 NativeTimelineInputGate.shared.setBlocked(false, for: window)
 finder.close()
 print("GRID_EXTERNAL_DROP_RESTORES_KEY_WINDOW_RESPONDER_AND_RESPECTS_REJECTION_MODAL_OK")

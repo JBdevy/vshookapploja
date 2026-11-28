@@ -13,14 +13,14 @@ precondition(input(64, .nan) == 64 && input(64, .infinity) == 64 && input(64, -1
 precondition(input(base, 1.001) > base && input(base, 1.001) < base + 1, "Trackpad keeps fractional heights")
 print("TRACK_HEIGHT_DIRECT_INPUT_OK immediate travel, reversal, bounds, fractional heights")
 
-let compactLimits = TrackHeightGeometry.globalLimits(scales: [1, 1], laneCounts: [1, 1], compact: [true, false])
+let compactLimits = TrackHeightGeometry.globalLimits(scales: [1, 1], laneCounts: [1, 1], compact: [true, false], desktop: true)
 for smooth in [false, true] {
     let gesture = TimelineTrackHeightMotion()
     var displayed: CGFloat = 90
     gesture.change(factor: 0.01, current: displayed, smoothWheel: smooth, limits: CGFloat(compactLimits.lowerBound)...CGFloat(compactLimits.upperBound)) { displayed = $0 }
     RunLoop.main.run(until: Date().addingTimeInterval(0.15))
-    precondition(displayed == TrackHeightGeometry.compactMinimumLaneHeight)
-    precondition(TrackHeightGeometry.laneHeight(base: displayed, scale: 1, count: 1, allowsCompactHeight: false) == base)
+    precondition(displayed == TrackHeightGeometry.desktopCompactMinimumLaneHeight)
+    precondition(TrackHeightGeometry.laneHeight(base: displayed, scale: 1, count: 1, allowsCompactHeight: false, desktop: true) == TrackHeightGeometry.desktopMinimumLaneHeight)
     gesture.cancel()
 }
 let reopenedMotion = TimelineTrackHeightMotion()
@@ -33,7 +33,7 @@ var reopenedHeight: CGFloat = 66
 reopenedMotion.change(factor: 0.01, current: reopenedHeight,
                       limits: CGFloat(compactLimits.lowerBound)...CGFloat(compactLimits.upperBound)) { reopenedHeight = $0 }
 RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
-precondition(reopenedHeight == 28 && outgoingValues.count == finalOutgoingCount,
+precondition(reopenedHeight == TrackHeightGeometry.desktopCompactMinimumLaneHeight && outgoingValues.count == finalOutgoingCount,
              "The first wheel event after opening a project uses its compact floor and cancels the old track-height animation")
 reopenedMotion.cancel()
 print("TRACK_HEIGHT_RECENT_SWITCH_FIRST_WHEEL_EVENT_OK")
@@ -96,10 +96,10 @@ precondition(fineHeight == 240)
 fineDelta(-1)
 RunLoop.main.run(until: Date().addingTimeInterval(0.04))
 precondition(fineHeight == 239, "the clamp drops excess remainder so reversing leaves the maximum immediately")
-fineMotion.cancel(); fineHeight = base + 1
+fineMotion.cancel(); fineHeight = TimelineTrackHeightLimits.minimum + 1
 fineDelta(-20); fineDelta(1)
 RunLoop.main.run(until: Date().addingTimeInterval(0.04))
-precondition(fineHeight == base + 1, "the minimum clamp cannot retain a hidden negative tail")
+precondition(fineHeight == TimelineTrackHeightLimits.minimum + 1, "the minimum clamp cannot retain a hidden negative tail")
 fineMotion.cancel(); fineHeight = base
 fineDelta(0.4); fineMotion.cancel(); fineDelta(0.2)
 precondition(fineHeight == base, "real cancellation clears pending fractions")
@@ -288,17 +288,30 @@ func heightWheel(_ flags: NSEvent.ModifierFlags, delta: CGFloat = 1, precise: Bo
     return event
 }
 // A native fixture supplies only event/window data; the production handler decides its action.
-for flags: NSEvent.ModifierFlags in [.command, .control, .shift] {
+for flags: NSEvent.ModifierFlags in [.command, .control] {
     for precise in [false, true] {
         for delta: CGFloat in [-1, 1] {
             let before = wheelPublications
             precondition(wheelView.handle(heightWheel(flags, delta: delta, precise: precise)),
-                         "Command, Control and Shift each reach the mixer's height callback")
+                         "Command and Control reach the mixer's global height callback")
             precondition(wheelPublications == before + 1)
             precondition(delta > 0 ? wheelFactors.last! > 1 : wheelFactors.last! < 1,
                          "each modifier preserves shrinking and expanding input")
             precondition(wheelSmoothing.last == !precise, "only a physical wheel requests smoothing")
         }
+    }
+}
+var selectedFactors: [Double] = []
+wheelView.changeSelected = { selectedFactors.append($0); return true }
+let globalBeforeSelection = wheelPublications
+for precise in [false, true] {
+    for delta: CGFloat in [-1, 1] {
+        let before = selectedFactors.count
+        precondition(wheelView.handle(heightWheel(.shift, delta: delta, precise: precise)))
+        precondition(selectedFactors.count == before + 1 && wheelPublications == globalBeforeSelection)
+        precondition(delta > 0 ? selectedFactors.last! > 1 : selectedFactors.last! < 1)
+        precondition(!wheelView.handle(heightWheel(.option, delta: delta, precise: precise)) &&
+                     selectedFactors.count == before + 1 && wheelPublications == globalBeforeSelection)
     }
 }
 let publicationsBeforePlain = wheelPublications

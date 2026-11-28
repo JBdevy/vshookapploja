@@ -23,7 +23,8 @@ def declaration(needle):
 def between(start, end):
     first = source.index(start)
     return source[first:source.index(end, first)]
-parts = [between('@MainActor private struct NativeTimelineAudioBodyConfiguration', '/// Structural data changes'),
+parts = [declaration('enum TimelineTrackHeightLimits {'),
+         between('@MainActor private struct NativeTimelineAudioBodyConfiguration', '/// Structural data changes'),
          between('private final class TimelineRenderMetadata {', '/// During a gain or fade gesture'),
          declaration('struct TimelineRenderKey:'),
          declaration('@MainActor private final class TimelineSelectionLayoutCache'),
@@ -57,7 +58,7 @@ extension NativeTimelineAudioBodyView {
     var inkValuesForTest: [String] {
         inkForTest.map { item in
             switch item.content {
-            case .text(let text, _), .label(let text): return text.string
+            case .text(let text, _), .label(let text), .movie(let text): return text.string
             case .emptyWaveform(let channels): return "channels:\(channels)"
             }
         }
@@ -79,14 +80,18 @@ preflight = preflight.replace('private func prepareHostedViewport', 'func prepar
 preflightTests = Path('Tests/Apple/TimelineNativeBodyPreflightTests.swift').read_text().replace('__NATIVE_BODY_PREFLIGHT_METHOD__', preflight)
 text_colors = Path('Apple/Shared/TextItemEditor.swift').read_text()
 text_colors = text_colors[text_colors.index('extension ItemTextColors {'):]
-tests = Path('Tests/Apple/TimelineNativeBodyTests.swift').read_text() + '\n' + preflightTests
+tests = Path('Tests/Apple/TimelineNativeBodyTests.swift').read_text() + '\n' + Path('Tests/Apple/TimelineMovieBodyTests.swift').read_text() + '\n' + preflightTests
 if os.environ.get('CATLIVE_ZOOM_BENCHMARK') == '1':
     tests = Path('Tests/Apple/TimelineZoomBodyPerformanceTests.swift').read_text()
 out.joinpath('main.swift').write_text(stubs + text_colors + '\n'.join(parts) + probes + tests)
 renderer = Path('Apple/Shared/MetalWaveformRenderer.swift').read_text()
-renderer = renderer.replace('    private var latest: MetalWaveformFrame?', '    var nativeBodySubmissionsForTest = 0\n    private var latest: MetalWaveformFrame?', 1)
-renderer = renderer.replace('    func submit(_ frame: MetalWaveformFrame) {', '    func submit(_ frame: MetalWaveformFrame) {\n        nativeBodySubmissionsForTest += 1', 1)
-renderer += '\nextension MetalWaveformSurface { var nativeBodyFrameForTest: MetalWaveformFrame? { latest } }\n'
+submit = '    func submit(_ frame: MetalWaveformFrame) {'
+assert renderer.count(submit) == 1, 'The waveform surface submit method changed'
+renderer = renderer.replace(submit, '''    private(set) var nativeBodySubmissionsForTest = 0
+    private(set) var nativeBodyFrameForTest: MetalWaveformFrame?
+    func submit(_ frame: MetalWaveformFrame) {
+        nativeBodySubmissionsForTest += 1
+        nativeBodyFrameForTest = frame''', 1)
 out.joinpath('MetalWaveformRenderer.swift').write_text(renderer)
 cache = Path('Apple/Shared/TimelineAudioWaveform.swift').read_text()
 cache += '''
@@ -103,18 +108,18 @@ extension TimelineAudioWaveform {
 '''
 out.joinpath('TimelineAudioWaveform.swift').write_text(cache)
 selection = Path('Apple/Shared/GridSelectionInput.swift').read_text()
-start = selection.index('struct GridSelectionItem {')
+start = selection.index('struct ElasticOverlayGeometry {')
 metrics = '\nimport AppKit\nimport CoreText\n'+selection[selection.index('enum GridSelectionHeaderText {'):selection.index('enum GridSelectionHeaderControls {')]
 appearance = selection.index('enum TrackMixerButtonAppearance {')
 appearance = selection[appearance:selection.index('\n}', appearance) + 2]
 out.joinpath('GridSelectionGeometry.swift').write_text('import SwiftUI\n' + appearance + '\n' + selection[start:selection.index('#if os(macOS)\nimport AppKit', start)] + metrics)
 PY
-swiftc -O -swift-version 5 -target "$(uname -m)-apple-macos12.0" \
+swiftc Application/Project/LinkedStemMedia.swift -O -swift-version 5 -target "$(uname -m)-apple-macos12.0" \
   Apple/Shared/TimelineRenderDiagnostics.swift Apple/Shared/TimelineVisibleClipIndex.swift \
   Application/Project/OutputPatch.swift Application/Project/DrummerPadKit.swift Application/Project/NativeFXSettings.swift \
   Application/Project/TrackRouting.swift Application/Project/MultiLoop.swift \
   Application/Project/TrackAutomation.swift Application/Controls/NativeFXParameter.swift Application/Project/ProjectModels.swift Application/Project/MIDIItem.swift Application/Project/ItemFade.swift Application/Project/ItemFadeCurve.swift Application/Project/TimelineTempo.swift \
-  Application/Project/ClipRepetition.swift Application/Project/AudioFileRead.swift \
+  Application/Project/ClipRepetition.swift Application/Project/AudioFileRead.swift Application/Project/ProjectDocumentCodec.swift Tests/Apple/VideoWaveformFixtures.swift \
   Apple/Shared/Theme.swift Apple/Shared/NativeTooltips.swift Apple/Shared/NativeTimelineInputGate.swift \
   Apple/Shared/TimelineItemWaveformColors.swift Apple/Shared/ItemWaveformPreview.swift "$test_dir/TimelineAudioWaveform.swift" \
   "$test_dir/MetalWaveformRenderer.swift" Apple/Shared/TimelineMetalWaveforms.swift \

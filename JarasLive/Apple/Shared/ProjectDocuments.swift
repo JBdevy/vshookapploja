@@ -369,7 +369,7 @@ extension UTType {
     }
     @Published var nativeNamePrompt = false
     @Published var nativeProjectName = ""
-    private var nativePendingCreation: (scan: StemScan?, detectBPM: Bool, recordingChannels: Int?)?
+    private var nativePendingCreation: (scan: StemScan?, detectBPM: Bool, recordingChannels: Int?, copyMedia: Bool)?
     var nativeNamingTemporarySave: Bool { isTemporary && nativePendingCreation == nil }
     private var nativeScopedFolders: [URL] = []
     private var nativeAudioTarget: (session: UUID, song: UUID, track: UUID, position: Double)?
@@ -428,16 +428,16 @@ extension UTType {
         folders = urls; folderReview = urls
         confirmFolders(urls)
     }
-    func confirmNativeStemImport(detectBPM: Bool) {
+    func confirmNativeStemImport(detectBPM: Bool, copyMedia: Bool = true) {
         guard let scan, !scan.folders.isEmpty else { error = "Select folders containing audio files."; return }
         guard !busy, !TrackRecording.shared.recording, !TrackRecording.shared.busy else {
             error = "Finish recording and pending operations before importing audio."; return
         }
         guard show.canControl() else { error = "Project editing is not available right now."; return }
         error = ""
-        if adding { finish(scan: scan, detectBPM: detectBPM, destination: nil) }
+        if adding { finish(scan: scan, detectBPM: detectBPM, destination: nil, copyMedia: copyMedia) }
         else {
-            nativePendingCreation = (scan, detectBPM, nil)
+            nativePendingCreation = (scan, detectBPM, nil, copyMedia)
             confirmNativeProjectName(presentPrompt: false)
         }
     }
@@ -464,7 +464,7 @@ extension UTType {
         }
         let directory = ProjectDirectoryPolicy.availableFolder(named: name, in: storage)
         nativePendingCreation = nil
-        finish(scan: pending.scan, detectBPM: pending.detectBPM, destination: directory.appendingPathComponent(name).appendingPathExtension("jl"), recordingChannels: pending.recordingChannels)
+        finish(scan: pending.scan, detectBPM: pending.detectBPM, destination: directory.appendingPathComponent(name).appendingPathExtension("jl"), recordingChannels: pending.recordingChannels, copyMedia: pending.copyMedia)
     }
     func cancelNativeProjectName() { nativePendingCreation = nil }
     #endif
@@ -725,7 +725,8 @@ extension UTType {
                     urls.append(url)
                 }
                 #endif
-                let sources = urls
+                let sources = urls.filter(GridMediaFileFilter.accepts)
+                guard !sources.isEmpty else { return }
                 let lyrics = sources.filter { $0.pathExtension.lowercased() == "jllyrics" }
                 if !lyrics.isEmpty {
                     guard lyrics.count == sources.count else { throw ProjectError.invalid("Drop lyrics separately from audio and video.") }
@@ -749,7 +750,7 @@ extension UTType {
                         }
                     }
                 }.value
-                if let prepared {
+                if let prepared, !prepared.tracks.isEmpty {
                     for imported in prepared.tracks where imported.kind == .video || imported.kind.isTeleprompter {
                         guard show.snapshot.project.songs.first(where: { $0.id == song })?.tracks.contains(where: { $0.id == imported.id && $0.kind == imported.kind }) == true else {
                             throw ProjectError.invalid("The destination Video track no longer exists")
@@ -1131,7 +1132,7 @@ extension UTType {
             var names = Set(try fm.contentsOfDirectory(atPath: stems.path).map { $0.lowercased() })
             var replacements: [String: AudioFile] = [:]
             for (index, path) in paths.enumerated() {
-                let source = path.hasPrefix("/") ? URL(fileURLWithPath: path) : directory.appendingPathComponent(path)
+                let source = path.hasPrefix("/") ? URL(fileURLWithPath: path) : directory.projectMedia(path)
                 let base = source.deletingPathExtension().lastPathComponent
                 var name = base + ".mp3", duplicate = 1
                 while !names.insert(name.lowercased()).inserted {
@@ -1173,26 +1174,32 @@ extension UTType {
         let missing = await Task.detached(priority: .userInitiated) {
             Set(ProjectAudioRecovery.missingPaths(in: project, directory: directory)).union(unreadableAudioPaths)
         }.value
-        let files = project.songs.flatMap(\.tracks).filter { $0.kind == .standard }.flatMap { track in
-            track.clips.compactMap { clip -> URL? in
-                guard !clip.isImage, let file = clip.audioFile ?? track.audioFile, !missing.contains(file.path) else { return nil }
-                return directory.appendingPathComponent(file.path)
+        var paths = Set<String>()
+        #if os(macOS)
+        var movies = Set<String>()
+        #endif
+        for song in project.songs {
+            for track in song.tracks {
+                for clip in track.clips where !clip.isImage {
+                    guard let file = clip.audioFile ?? track.audioFile, !missing.contains(file.path) else { continue }
+                    if track.kind == .standard || clip.isProjectionMedia { paths.insert(file.path) }
+                    #if os(macOS)
+                    if clip.isProjectionMedia, clip.audioFile != nil { movies.insert(file.path) }
+                    #endif
+                }
             }
         }
+        let files = paths.map { directory.projectMedia($0) }
         #if os(macOS)
         // Resolve movie audio before the workspace can start playback. A
         // render deadline must never wait for AVAssetReader container decoding.
-        let movies = Set(project.songs.flatMap(\.tracks).flatMap(\.clips).compactMap { clip -> String? in
-            guard clip.isProjectionMedia, !clip.isImage, let path = clip.audioFile?.path, !missing.contains(path) else { return nil }
-            return path
-        })
         let opening = openingCancellation
         if !movies.isEmpty {
             status = "Preparing audio…"
-            await Task.detached(priority: .userInitiated) {
+            await Task.detached(priority: .userInitiated) { [movies] in
                 for path in movies {
                     guard opening?.cancelled != true, !Task.isCancelled else { return }
-                    _ = try? AudioFileRead.openMedia(directory.appendingPathComponent(path), cancelled: { opening?.cancelled == true })
+                    _ = try? AudioFileRead.openMedia(directory.projectMedia(path), cancelled: { opening?.cancelled == true })
                 }
             }.value
         }
@@ -1370,9 +1377,15 @@ extension UTType {
     }
     private func finishOpening(_ project: Project, at url: URL) async throws {
         status = "Preparing waveforms…"
+        #if os(macOS)
+        let externalOverviewIsCurrent: (@Sendable (URL) -> Bool)? = { TimelineAudioWaveform.hasCurrentPeakFile($0) }
+        #else
+        let externalOverviewIsCurrent: (@Sendable (URL) -> Bool)? = nil
+        #endif
         let prepared = try await ProjectOpeningWork.run {
             var ignored = Set<String>(), notices: [String] = []
-            let enriched = try StemProjectImporter.populateChannelOverviews(project, directory: url.deletingLastPathComponent(), onUnreadable: { path, error in
+            let enriched = try StemProjectImporter.populateChannelOverviews(project, directory: url.deletingLastPathComponent(),
+                externalOverviewIsCurrent: externalOverviewIsCurrent, onUnreadable: { path, error in
                 ignored.insert(path); notices.append(path + "\n" + error.localizedDescription)
             })
             return (enriched, ignored, notices)
@@ -1661,50 +1674,11 @@ extension UTType {
         }
         do {
             var imported = track
-            imported.clips = [try Self.readMIDIItem(url, start: cursor)]
+            imported.clips = [try StemProjectImporter.readMIDIItem(url, start: cursor)]
             try show.insertAudioTracks([imported], song: song.id, project: project)
         } catch { audioImportError = error.localizedDescription }
     }
 
-    nonisolated private static func readMIDIItem(_ url: URL, start: Double) throws -> AudioClip {
-        let unreadable = ProjectError.invalid("Could not read the MIDI file.")
-        var source: MusicSequence?
-        guard NewMusicSequence(&source) == noErr, let source else { throw unreadable }
-        defer { DisposeMusicSequence(source) }
-        guard MusicSequenceFileLoad(source, url as CFURL, .midiType, []) == noErr else { throw unreadable }
-        var count: UInt32 = 0
-        MusicSequenceGetTrackCount(source, &count)
-        var notes: [MIDINote] = [], duration = 0.0
-        for index in 0..<count {
-            var track: MusicTrack?
-            var iterator: MusicEventIterator?
-            guard MusicSequenceGetIndTrack(source, index, &track) == noErr, let track,
-                  NewMusicEventIterator(track, &iterator) == noErr, let iterator else { continue }
-            defer { DisposeMusicEventIterator(iterator) }
-            var hasEvent = DarwinBoolean(false)
-            while MusicEventIteratorHasCurrentEvent(iterator, &hasEvent) == noErr, hasEvent.boolValue {
-                var beat: MusicTimeStamp = 0, kind: MusicEventType = 0, size: UInt32 = 0
-                var data: UnsafeRawPointer?
-                MusicEventIteratorGetEventInfo(iterator, &beat, &kind, &data, &size)
-                if kind == kMusicEventType_MIDINoteMessage, let data, size >= MemoryLayout<MIDINoteMessage>.size {
-                    let note = data.load(as: MIDINoteMessage.self)
-                    var begin = 0.0, end = 0.0
-                    if note.velocity > 0, MusicSequenceGetSecondsForBeats(source, beat, &begin) == noErr,
-                       MusicSequenceGetSecondsForBeats(source, beat + Double(note.duration), &end) == noErr,
-                       begin.isFinite, end.isFinite, begin >= 0, end > begin {
-                        notes.append(.init(start: begin * 2, length: (end - begin) * 2, pitch: Int(note.note),
-                                           velocity: Int(note.velocity), channel: Int(note.channel) + 1))
-                        duration = max(duration, end)
-                    }
-                }
-                MusicEventIteratorNextEvent(iterator)
-            }
-        }
-        guard !notes.isEmpty else { throw ProjectError.invalid("The MIDI file contains no notes.") }
-        var item = AudioClip(id: UUID(), name: url.deletingPathExtension().lastPathComponent, startTime: start, duration: duration)
-        item.midi = MIDIItem(notes: notes)
-        return item
-    }
     #endif
     func browsePortablePackage() {
         guard !busy, !TrackRecording.shared.recording, !TrackRecording.shared.busy else { return }
@@ -1947,8 +1921,8 @@ extension UTType {
         guard (1...128).contains(channels) else { error = "Choose between 1 and 128 channels."; return }
         finish(scan: nil, detectBPM: false, recordingChannels: channels)
     }
-    func confirmImport(detectBPM: Bool) { guard let scan else { return }; finish(scan: scan, detectBPM: detectBPM) }
-    private func finish(scan: StemScan?, detectBPM: Bool, recordingChannels: Int? = nil) {
+    func confirmImport(detectBPM: Bool, copyMedia: Bool = true) { guard let scan else { return }; finish(scan: scan, detectBPM: detectBPM, copyMedia: copyMedia) }
+    private func finish(scan: StemScan?, detectBPM: Bool, recordingChannels: Int? = nil, copyMedia: Bool = true) {
         guard show.canControl(), !busy, !TrackRecording.shared.recording, !TrackRecording.shared.busy else { return }
         #if os(iOS)
         if !(scan != nil && adding) {
@@ -1956,15 +1930,15 @@ extension UTType {
             // from the alert's button can leave its keyboard window in charge
             // while Files tries to focus its new-folder rename field.
             guard nativeStorageDirectory != nil else {
-                afterNativeStorage = { [weak self] in self?.finish(scan: scan, detectBPM: detectBPM, recordingChannels: recordingChannels) }
+                afterNativeStorage = { [weak self] in self?.finish(scan: scan, detectBPM: detectBPM, recordingChannels: recordingChannels, copyMedia: copyMedia) }
                 nativePicker = .storage; return
             }
-            nativePendingCreation = (scan, detectBPM, recordingChannels); nativeProjectName = ""; nativeNamePrompt = true; return
+            nativePendingCreation = (scan, detectBPM, recordingChannels, copyMedia); nativeProjectName = ""; nativeNamePrompt = true; return
         }
         #endif
-        finish(scan: scan, detectBPM: detectBPM, destination: nil, recordingChannels: recordingChannels)
+        finish(scan: scan, detectBPM: detectBPM, destination: nil, recordingChannels: recordingChannels, copyMedia: copyMedia)
     }
-    private func finish(scan: StemScan?, detectBPM: Bool, destination: URL?, recordingChannels: Int? = nil) {
+    private func finish(scan: StemScan?, detectBPM: Bool, destination: URL?, recordingChannels: Int? = nil, copyMedia: Bool = true) {
         let append = scan != nil && adding
         let url: URL
         if append {
@@ -1989,7 +1963,7 @@ extension UTType {
         do { try ProjectDirectoryPolicy.validate(url) }
         catch { self.error = error.localizedDescription; return }
         let remove = removal
-        busy = true; error = ""; status = "Copying audio and saving project…"
+        busy = true; error = ""; status = copyMedia ? "Copying audio and saving project…" : "Preparing audio…"
         let canExecute = show.canExecute
         show.canExecute = { false }
         Task {
@@ -2026,7 +2000,7 @@ extension UTType {
                     var readWarnings: [String] = []
                     var project = try scan.map { try StemProjectImporter.build(scan: $0, remove: remove, base: importBase, destination: url, progress: { [weak self] current, total, name in
                         Task { @MainActor [weak self] in self?.status = "Importing \(current)/\(total): \(name)" }
-                    }, onUnreadable: { _, _ in }) } ?? importBase
+                    }, onUnreadable: { _, _ in }, copyMedia: copyMedia) } ?? importBase
                     if project.projectSyncID == nil { project.projectSyncID = UUID() }
                     var tempoWarnings: [String] = []
                     do {
@@ -2039,7 +2013,7 @@ extension UTType {
                             try Task.checkCancellation()
                             if song.markers?.contains(where: { $0.isTempo && $0.regionOwnerID == region.id }) == true { continue }
                             let detection = try ClickTempoDetector.markersWithMeter(song: song, region: region) { file in
-                                try TimelineAudioWaveform.clickTransients(directory.appendingPathComponent(file.path)).map {
+                                try TimelineAudioWaveform.clickTransients(directory.projectMedia(file.path)).map {
                                     ClickTempoDetector.Transient(position: $0.position, peak: $0.peak, shape: $0.shape)
                                 }
                             }
@@ -2058,7 +2032,9 @@ extension UTType {
                     } catch {
                         let existing = Set(importBase.songs.flatMap(\.tracks).flatMap(\.clips).compactMap { $0.audioFile?.path })
                         let imported = project.songs.flatMap(\.tracks).flatMap(\.clips).compactMap { $0.audioFile?.path }.filter { !existing.contains($0) }
-                        for folder in Set(imported.map { url.deletingLastPathComponent().appendingPathComponent($0).deletingLastPathComponent() }) { try? FileManager.default.removeItem(at: folder) }
+                        for path in Set(imported) where !LinkedStemMedia.isReference(path) {
+                            try? FileManager.default.removeItem(at: url.deletingLastPathComponent().appendingPathComponent(path))
+                        }
                         throw error
                     }
                 }.value
@@ -2203,7 +2179,7 @@ struct ProjectBrowserView: View {
     @State private var selectingMultipleProjects = false
     @State private var recentStorage: [URL: String] = [:]
     private var filteredRecent: [URL] { documents.recent.filter { RecentProjectEntry.matches($0, query: recentSearch) } }
-    @State private var askingForBPM = false
+    @State private var askingForMediaLocation = false
     @State private var recordingSetup = false
     @State private var recordingChannelCount = 32
     #if os(iOS)
@@ -2241,8 +2217,8 @@ struct ProjectBrowserView: View {
                     }.frame(maxHeight: 120)
                 }
                 TextField("Names to remove, separated by commas", text: $documents.removal).textFieldStyle(.roundedBorder)
-                Text("Original folders remain unchanged. Audio is copied beside the .jl project.").font(.jarasCaption2).foregroundStyle(JarasTheme.secondary)
-                HStack { Button("Back", action: documents.reviewFolderOrder); Spacer(); Button("Create / Add") { askingForBPM = true }.buttonStyle(StageButtonStyle(color: JarasTheme.green)).keyboardShortcut(.defaultAction) }
+                Text("Next, choose whether to copy the audio into the project or use the source folder.").font(.jarasCaption2).foregroundStyle(JarasTheme.secondary)
+                HStack { Button("Back", action: documents.reviewFolderOrder); Spacer(); Button("Create / Add") { askingForMediaLocation = true }.buttonStyle(StageButtonStyle(color: JarasTheme.green)).keyboardShortcut(.defaultAction) }
                 #endif
             } else {
                 HStack {
@@ -2459,9 +2435,11 @@ struct ProjectBrowserView: View {
                 Text("Open a project before using Add Project.")
             }
             #if os(macOS)
-            .confirmationDialog("Detect BPM for each song?", isPresented: $askingForBPM, titleVisibility: .visible) {
-                Button("Yes") { documents.confirmImport(detectBPM: true) }
-                Button("No") { documents.confirmImport(detectBPM: false) }
+            .sheet(isPresented: $askingForMediaLocation) {
+                StemImportOptions { bpm, copy in
+                    askingForMediaLocation = false
+                    documents.confirmImport(detectBPM: bpm, copyMedia: copy)
+                }
             }
             #endif
     }
@@ -3024,7 +3002,8 @@ private final class ProjectSourcePanelValidator: NSObject, NSOpenSavePanelDelega
     func source() -> Source {
         if let token, pasteboard.string(forType: itemType) == token { return tracksCopied ? .tracks : .items }
         let urls = (pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
-        return urls.isEmpty ? .none : .files(urls)
+        let supported = urls.filter(GridMediaFileFilter.accepts)
+        return supported.isEmpty ? .none : .files(supported)
     }
     nonisolated static func containsVisualMedia(_ urls: [URL]) -> Bool {
         urls.contains { url in

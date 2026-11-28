@@ -4,6 +4,7 @@
 #include "PlaybackCapacity.hpp"
 #include <map>
 #include <utility>
+#include <set>
 namespace jaras {
 enum class CommandKind { toggleMultiLoopBypass, queueSection, cancelSection, clipFadeIn, clipFadeOut, loopStart, loopEnd, escape, phase, masterMono, ignoreNext, tempo, beatsPerBar, beatUnit, play, stop, next, previous, queue, select, toggleLoop, seek, editSeek, subPlay, subStop, subSeek, stopAll, volume, pan, mute, solo, selectRegion, queueRegion, pause, clipMute, clipGain, clipPhase, clipPan, clipChannelMode, clipNormalization, clipPitch, clipFadeInCurve, clipFadeInSCurve, clipFadeOutCurve, clipFadeOutSCurve, queueBeatSeek, cancelBeatSeek, queueBarSeek, queueMarkerSeek, queuePartSeek };
 inline bool queuesTimelineSeek(CommandKind kind) {
@@ -25,12 +26,14 @@ public:
     }
     bool applyProjectSync(projectSync::Frame frame, double elapsed, bool first, bool *mixerChanged=nullptr);
     void applyProjectEdit(Project project);
+    Project exchangeProjectEdit(Project project);
     // Control-thread timing history excludes immutable decoded peak arrays.
     Project timingSnapshot();
     void restoreTimingSnapshot(Project project);
     void setRegionPitchState(const ID&, std::optional<int>, std::optional<std::vector<ID>>, std::optional<std::vector<ID>>);
     const Project& project() const noexcept { return project_; }
     const TransportState& transport() const noexcept { return transport_; }
+    bool tunerInputAllowed() const noexcept { return !transport_.playing && !transport_.subPlay.playing; }
     const Song* currentSong() const noexcept;
     std::size_t activeAudioFileCount() const { const auto* song = currentSong(); return song ? playbackCapacity::active(*song, transport_, project_.regionSetlist && project_.regionSetlist->subplayExclusiveTrackIDs ? *project_.regionSetlist->subplayExclusiveTrackIDs : std::vector<ID>{}) : 0; }
     bool liveCapacityExceeded() const { const auto* song = currentSong(); return song && playbackCapacity::exceeded(*song, transport_, project_.regionSetlist && project_.regionSetlist->subplayExclusiveTrackIDs ? *project_.regionSetlist->subplayExclusiveTrackIDs : std::vector<ID>{}); }
@@ -52,6 +55,7 @@ public:
     void setClipFXBypass(const ID& clip, bool bypassed);
     void setClipPitchState(const ID& clip, std::optional<double> semitones);
     void setClipName(const ID& clip, std::string name);
+    void setItemsMuted(const std::set<ID>& ids, bool muted);
     void setClipText(const ID& clip, std::string text);
     void setMIDIInput(const ID& track, int slot);
     void setMIDIChannel(const ID& track, int channel);
@@ -62,19 +66,25 @@ public:
     void insertAudioTracks(const ID& song, std::vector<Track> tracks);
     void addRecordedClip(const ID& track, AudioClip clip, bool replacing = false);
     void setTimecode(const ID& track, TimecodeSettings settings);
+    using TrackColors = std::map<ID, std::optional<unsigned>>;
+    TrackColors randomTrackColors(const ID& song, const std::set<ID>& tracks) const;
+    void exchangeTrackColors(const ID& song, TrackColors& colors);
     void editTrack(const ID& id, std::string name, std::optional<unsigned> color);
     bool soloTrackExclusively(const ID& id);
+    std::map<ID,double> setTrackHeights(const ID& song, const std::map<ID,double>& scales);
     void setTrackHeight(const ID& song, const std::optional<ID>& track, double scale);
     void setTimelineLocks(bool locked, int options);
     void editMasterColor(unsigned color);
     std::map<ID, int> setTrackMixerComponents(const ID& song, const std::map<ID, int>& masks);
     void setMarkers(const std::vector<TimelineMarker>& markers, const std::vector<ID>& removing = {}, bool retime = false);
     void setMarker(ID id, std::string name, double position, unsigned color, std::optional<double> bpm = {}, std::optional<int> beats = {}, std::optional<int> unit = {}, std::optional<std::string> timebase = {}, std::optional<bool> section = {}, std::optional<bool> loopSection = {});
+    double setFreeTempo(const ID& song, double bpm);
     void setProjectTiming(double bpm, int beats, int unit, std::optional<ProjectTimeSettings> settings);
     void deleteManualMarker(const ID& id);
     void setRegionInit(const ID& id, int count, bool bars);
     void setRegionPitch(const ID& id, int semitones, std::vector<ID> tracks, std::vector<ID> groups);
     void editRegion(const ID& id, std::string name, unsigned color, bool uppercaseName = true);
+    void exchangeTimelineNames(const ID& song, std::map<ID, std::string>& regions, std::map<ID, std::string>& markers);
     void moveClip(const ID& clipId, double start, const ID& destination = {});
     void regionFromClip(const ID& clipId, ID regionId);
     void regionsFromClips(const std::vector<std::pair<ID, ID>>& items);
@@ -85,7 +95,7 @@ public:
     const Part* sectionPlaybackRegion() const;
     std::optional<double> nextSectionTrigger() const;
 private:
-    void commitProjectEdit(Project project);
+    Project commitProjectEdit(Project project);
     void advanceWithoutLiveTracking(double elapsed);
     std::vector<ID> automaticSectionHandled_;
     struct AutomaticSectionRun { ID trigger; int count = 0; bool cancelled = false; };

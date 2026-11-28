@@ -691,6 +691,32 @@ static void testBeatSeek() {
     tempo.id = "tempo"; tempo.name = "Tempo"; tempo.position = .85;
     tempo.tempoBPM = 90; tempo.tempoBeats = 6; tempo.tempoUnit = 8;
     project.songs.front().markers = std::vector<TimelineMarker>{tempo};
+    auto cueProject = project;
+    TimelineMarker normal;
+    normal.id = "normal"; normal.name = "Normal"; normal.position = 1.5;
+    TimelineMarker part;
+    part.id = "part"; part.name = "Part"; part.position = 1.2; part.section = true;
+    cueProject.songs.front().markers->push_back(normal);
+    cueProject.songs.front().markers->push_back(part);
+    const auto cueNear = [](double a, double b) { return std::abs(a - b) < 1e-8; };
+    for (const auto& [mode, boundary] : std::vector<std::pair<CommandKind, double>>{
+        {CommandKind::queueBarSeek, 2.85}, {CommandKind::queueMarkerSeek, 1.5}, {CommandKind::queuePartSeek, 1.2}}) {
+        Engine cue; cue.loadProject(cueProject);
+        cue.execute({CommandKind::editSeek, {}, 1});
+        cue.execute({CommandKind::play});
+        cue.execute({mode, {}, 16});
+        expect(cue.transport().beatSeek && cueNear(cue.transport().beatSeek->boundary, boundary),
+               "Edit must distinguish the next bar, a normal marker and a section marker");
+        cue.advance(boundary - 1 + .01);
+        expect(!cue.transport().beatSeek && cueNear(cue.transport().position, 16.01),
+               "Edit must seek only at the selected boundary");
+    }
+    Engine noCue; noCue.loadProject(cueProject);
+    noCue.execute({CommandKind::editSeek, {}, 2});
+    noCue.execute({CommandKind::play});
+    noCue.execute({CommandKind::queueMarkerSeek, {}, 16});
+    expect(!noCue.transport().beatSeek && cueNear(noCue.transport().editPosition, 16) &&
+           cueNear(noCue.transport().position, 2), "Edit moves only the edit cursor when there is no following marker");
     Engine engine; engine.loadProject(project);
     const auto queue = [&](double at) { engine.execute({CommandKind::queueBeatSeek, {}, at}); };
     const auto near = [](double a, double b) { return std::abs(a - b) < 1e-8; };
@@ -931,7 +957,12 @@ int main() try {
     ignore.advance(2); expect(!ignore.transport().playing && ignore.transport().position == 25, "late Ignore Next uses actual file end");
     ignore.execute({CommandKind::stopAll}); ignore.execute({CommandKind::selectRegion, "ignore-third"}); ignore.execute({CommandKind::play}); ignore.execute({CommandKind::ignoreNext});
     expect(!ignore.transport().ignoreNextAfter, "last drawer song cannot ignore a nonexistent next song");
-    ignore.setRegionPitch("ignore-first", 12, {"track"}, {});
+    ignore.setRegionPitch("ignore-first", 8, {"track"}, {});
+    expect(!ignore.project().songs[0].parts[1].pitchSemitones, "running transport ignores region Tuner");
+    ignore.execute({CommandKind::stopAll});
+    ignore.setRegionPitch("ignore-first", 12, {"track", "deleted-track"}, {"deleted-group"});
+    expect(ignore.project().songs[0].parts[1].pitchTrackIDs == std::vector<ID>{"track"} &&
+           ignore.project().songs[0].parts[1].pitchGroupIDs == std::vector<ID>{}, "ignore obsolete Tuner targets and preserve explicit selection");
     ignore.setRegionPitch("ignore-second", -12, {"track"}, {});
     expect(ignore.project().songs[0].parts[1].pitchSemitones == 12 && ignore.project().songs[0].parts[2].pitchSemitones == -12, "each drawer song owns its pitch settings");
     bool pitchRejected = false; try { ignore.setRegionPitch("ignore-first", 13, {"track"}, {}); } catch (...) { pitchRejected = true; }
