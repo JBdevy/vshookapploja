@@ -16,6 +16,10 @@ on:
         description: 'Executar a bateria do motor de áudio e efeitos do iOS'
         type: boolean
         default: false
+      ios_only:
+        description: 'Compilar somente o CatLive Nativo para iPadOS'
+        type: boolean
+        default: false
       upload_to_store:
         description: 'Enviar o IPA ao App Store Connect'
         type: boolean
@@ -86,7 +90,7 @@ jobs:
       APP_STORE_CONNECT_API_KEY_P8_BASE64: ${{ secrets.CATLIVE_APP_STORE_CONNECT_API_KEY_P8_BASE64 }}
   android:
     needs: prepare
-    if: inputs.existing_ios_run == ''
+    if: inputs.existing_ios_run == '' && inputs.ios_only != true
     uses: ./.github/workflows/catlive-android-release.yml
     with:
       version: ${{ needs.prepare.outputs.version }}
